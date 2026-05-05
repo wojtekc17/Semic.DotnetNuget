@@ -1,0 +1,1008 @@
+:root {
+  color-scheme: var(--vscode-color-scheme, dark);
+  --background: var(--vscode-editor-background, #1e1e1e);
+  --border: var(--vscode-panel-border, rgba(255, 255, 255, 0.08));
+  --border-strong: var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+  --text: var(--vscode-foreground, #cccccc);
+  --text-muted: var(--vscode-descriptionForeground, #9d9d9d);
+  --accent: var(--vscode-focusBorder, #007fd4);
+  --button: var(--vscode-button-background, #0e639c);
+  --buttonText: var(--vscode-button-foreground, #ffffff);
+  --input: var(--vscode-input-background, #252526);
+  --error: var(--vscode-errorForeground, #f14c4c);
+  --warning: var(--vscode-editorWarning-foreground, #cca700);
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--text);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.appShell {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.nugetWorkspace {
+  display: grid;
+  grid-template-columns: minmax(520px, 0.55fr) minmax(320px, 0.45fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.packageColumn {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.toolbar {
+  display: grid;
+  gap: 8px;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs,
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tabs {
+  overflow-x: auto;
+}
+
+.tabButton,
+.iconButton {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+.refreshButton,
+.infoButton,
+.gearButton {
+  min-width: 30px;
+  border: 1px solid transparent;
+  font-size: 0;
+}
+
+.refreshButton {
+  margin-left: auto;
+}
+
+.infoButton,
+.gearButton {
+  margin-left: 0;
+}
+
+.refreshButton::before {
+  content: "\21bb";
+  font-size: 16px;
+}
+
+.refreshButton:has(.spinner)::before {
+  content: "";
+}
+
+.gearButton::before {
+  content: "\2699";
+  font-size: 16px;
+}
+
+.infoButton::before {
+  content: "i";
+  font-size: 16px;
+}
+
+.gearButton.isActive,
+.infoButton.isActive,
+.iconButton:hover,
+.tabButton:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.tabButton.isActive {
+  color: var(--text);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.tabButton span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 16px;
+  margin-left: 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 65%, transparent);
+  color: var(--buttonText);
+  font-size: 11px;
+}
+
+.tabButton .warningTabBadge {
+  min-width: 22px;
+  background: color-mix(in srgb, #f5c542 82%, transparent);
+  color: #1f1f1f;
+  font-weight: 700;
+}
+
+.searchBox {
+  position: relative;
+  width: min(360px, 100%);
+  min-width: 160px;
+}
+
+.searchInput {
+  width: min(360px, 100%);
+  min-width: 0;
+  height: 27px;
+  padding: 4px 28px 4px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+  outline: none;
+}
+
+.clearSearchButton {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 25px;
+  height: 25px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.clearSearchButton:hover {
+  color: var(--text);
+}
+
+.textInput {
+  width: 100%;
+  height: 27px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+  outline: none;
+}
+
+.searchInput:focus,
+.textInput:focus,
+.sourceSelect:focus,
+.sortSelect:focus {
+  border-color: var(--accent);
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sortSelect,
+.sourceSelect {
+  height: 27px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+}
+
+.toolbarSourceSelect {
+  max-width: 180px;
+}
+
+.toolbarSpacer {
+  flex: 1;
+}
+
+.contentScroller {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.packageList {
+  display: grid;
+}
+
+.loadMoreRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.loadingRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--text-muted);
+}
+
+.centeredSpinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: spinnerRotation 800ms linear infinite;
+}
+
+@keyframes spinnerRotation {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.packageRow {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.packageButton {
+  appearance: none;
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.packageButton:hover,
+.packageButton:focus {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: none;
+}
+
+.packageButton.isSelected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.packageIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  overflow: hidden;
+  background: #512bd4;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.packageIcon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--background);
+}
+
+.packageMain {
+  min-width: 0;
+}
+
+.packageMain h3 {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0 0 3px;
+  font-size: 13px;
+}
+
+.verified {
+  color: var(--accent);
+}
+
+.packageMetaStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.verifiedBadge,
+.downloadBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.verifiedBadge {
+  color: var(--accent);
+}
+
+.downloadBadge {
+  color: var(--text);
+}
+
+.downloadIcon::before {
+  content: "\2193";
+  font-weight: 700;
+}
+
+.byline,
+.description,
+.downloads,
+.pathText {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.description {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.versionText {
+  align-self: start;
+  padding-top: 2px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.warningText {
+  color: var(--warning);
+}
+
+.projectChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.projectChips span {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.detailsPane {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 18px;
+}
+
+.detailsSection {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.fieldLabel {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+}
+
+.detailsSection h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.sectionHint {
+  color: var(--text-muted);
+}
+
+.sourceList {
+  display: grid;
+  gap: 2px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.sourceRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.sourceRow:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.sourceSelectButton {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.sourceRow.isActive .sourceSelectButton span {
+  color: var(--accent);
+}
+
+.sourceSelectButton code {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspaceSettingRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.optionRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.workspaceSettingRow strong {
+  font-size: 12px;
+}
+
+.sourceActionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.sourceActionButton:hover {
+  border-color: var(--border-strong);
+  filter: brightness(1.08);
+}
+
+.removeSourceButton {
+  border-color: color-mix(in srgb, var(--error) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--error) 16%, var(--input));
+  color: var(--text);
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  cursor: pointer;
+  padding: 5px 12px;
+}
+
+.primaryButton {
+  border: 1px solid var(--button);
+  background: var(--button);
+  color: var(--buttonText);
+}
+
+.secondaryButton {
+  border: 1px solid var(--border-strong);
+  background: var(--input);
+  color: var(--text);
+}
+
+.dangerButton {
+  border: 1px solid color-mix(in srgb, var(--error) 60%, var(--border-strong));
+  background: color-mix(in srgb, var(--error) 16%, var(--input));
+  color: var(--text);
+}
+
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sourceForm {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.buttonRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.primaryButton:hover,
+.dangerButton:hover,
+.linkButton:hover {
+  filter: brightness(1.08);
+}
+
+.linkButton {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.projectSelectHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.projectSelectList {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+
+.projectSelectRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.projectSelectRow:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.projectSelectRow small {
+  grid-column: 2;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.versionsPanel {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+}
+
+.projectVersionTable {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 120px;
+  max-height: 190px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+
+.projectVersionHeader,
+.projectVersionRow {
+  display: grid;
+  grid-template-columns: 26px minmax(110px, 1fr) 78px 78px 96px;
+  align-items: center;
+}
+
+.projectVersionHeader {
+  padding-right: 12px;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.projectVersionHeader span,
+.projectVersionRow span {
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectVersionScroller {
+  min-height: 0;
+  overflow: auto;
+}
+
+.projectVersionRow {
+  min-width: 390px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.projectVersionRow:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.projectVersionRow input {
+  margin-left: 6px;
+}
+
+.packagePreview {
+  display: grid;
+  gap: 12px;
+  min-height: 100%;
+  padding-bottom: 16px;
+}
+
+.previewStickyHeader {
+  position: sticky;
+  top: -14px;
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  padding: 14px 0 8px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+}
+
+.previewHeader {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.previewHeader h2 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewIcon {
+  width: 28px;
+  height: 28px;
+}
+
+.previewFormGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.updateFormGrid,
+.browseFormGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+}
+
+.installedFormGrid {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.previewFormGrid label {
+  display: grid;
+  gap: 5px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mappingNotice {
+  padding: 4px 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.optionsDetails {
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 8px 0;
+}
+
+.optionsDetails summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.previewTabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.previewTab {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.previewTab.isActive {
+  border-bottom: 2px solid var(--accent);
+}
+
+.readmePreview {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+
+.readmePreview a {
+  color: var(--accent);
+}
+
+.readmePreview h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.readmePreview h2 {
+  margin: 8px 0 0;
+  font-size: 18px;
+}
+
+.readmePreview p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.readmePreview pre {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--input) 72%, #000000);
+}
+
+.readmePreview code {
+  padding: 1px 4px;
+  background: var(--input);
+}
+
+.markdownImage {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdownListItem {
+  padding-left: 10px;
+}
+
+.packageDetailsList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.packageDetailsList div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.packageDetailsList dt {
+  color: var(--text-muted);
+}
+
+.packageDetailsList dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dependencyGroup {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.dependencyGroup p,
+.dependencyGroup ul {
+  margin: 0;
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.badgeRow span {
+  padding: 3px 6px;
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.installButton {
+  position: sticky;
+  bottom: 0;
+}
+
+.statsList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.statsList div {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+}
+
+.statsList dt {
+  color: var(--text-muted);
+}
+
+.statsList dd {
+  margin: 0;
+}
+
+.errorSection p {
+  margin: 0;
+  color: var(--error);
+}
+
+.emptyState {
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  min-height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+
+.loadingState {
+  min-height: 100%;
+}
+
+.emptyState h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.emptyState p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.statusBar strong {
+  color: var(--text);
+}
+
+.status-error strong {
+  color: var(--error);
+}
+
+@media (max-width: 980px) {
+  .nugetWorkspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(260px, 45vh) minmax(280px, 1fr);
+  }
+
+  .packageColumn {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detailsPane {
+    height: auto;
+    min-height: 0;
+  }
+}

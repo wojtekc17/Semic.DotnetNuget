@@ -1,0 +1,15 @@
+src/**
+webview/src/**
+webview/tsconfig.json
+tsconfig.json
+vite.config.ts
+.gitignore
+.vscode/**
+.dotnet/**
+.dotnet-cli-home/**
+extension/**
+scripts/**
+webview/static/**
+media/demo.gif
+media/*.svg
+**/*.map

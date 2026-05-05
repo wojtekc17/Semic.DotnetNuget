@@ -1,0 +1,115 @@
+{
+  "name": "dotnet-nuget",
+  "displayName": "Semic NuGet(.NET)",
+  "description": "Browse NuGet sources and inspect packages used by .NET projects loaded from .slnx files.",
+  "version": "1.1.0",
+  "publisher": "semic",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wojtekc17/Semic.DotnetNuget.git"
+  },
+  "engines": {
+    "vscode": "^1.116.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "dotnet",
+    ".net",
+    "nuget",
+    "packages",
+    "package-manager",
+    "csharp",
+    "semic"
+  ],
+  "icon": "media/icon.png",
+  "main": "./dist/Extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Semic Dotnet NuGet",
+      "properties": {
+        "semicDotnetNuget.source": {
+          "type": "string",
+          "default": "__all__",
+          "description": "NuGet source name to use by default. Available values are read from 'dotnet nuget list source'. Use '__all__' for all enabled sources."
+        },
+        "semicDotnet.workspace.useAllProjects": {
+          "type": "boolean",
+          "default": false,
+          "description": "Scan all .csproj files in the workspace instead of loading projects from a .sln or .slnx file."
+        },
+        "semicDotnet.workspace.discoveryInitialized": {
+          "type": "boolean",
+          "default": false,
+          "description": "Internal flag that prevents repeated automatic discovery after the workspace loading mode has been chosen."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "semic-dotnet-nuget.open",
+        "title": "Semic NuGet: Open",
+        "category": "Semic NuGet"
+      },
+      {
+        "command": "semic-dotnet-nuget.refresh",
+        "title": "Semic NuGet: Refresh",
+        "category": "Semic NuGet"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "semicDotnetNugetPanelContainer",
+          "title": "NUGET",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "views": {
+      "semicDotnetNugetPanelContainer": [
+        {
+          "id": "semicDotnetNugetView",
+          "name": "Packages",
+          "type": "webview",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "semic-dotnet-nuget.open",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "npm run build:webview && tsc -p .",
+    "watch": "concurrently \"tsc -w -p .\" \"npm run build:webview -- --watch\"",
+    "build:webview": "node scripts/build-webview.mjs",
+    "watch:webview": "node scripts/build-webview.mjs --watch",
+    "package": "npm run compile && vsce package --githubBranch master --no-dependencies",
+    "publish:marketplace": "vsce publish --githubBranch master",
+    "lint": "tsc --noEmit -p . && tsc --noEmit -p webview/tsconfig.json"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/vscode": "^1.116.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "@vscode/vsce": "^3.9.0",
+    "concurrently": "^9.2.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8"
+  }
+}
