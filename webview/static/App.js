@@ -404,13 +404,12 @@ function renderBulkPackageAction(groups) {
   }
 
   groups = groups ?? getVisibleInstalledGroups();
-  const selectedCount = state.selectedProjectIds.size;
   const selectedPackageCount = groups.filter((group) => state.bulkSelectedPackageIds.has(group.id)).length;
   const allPackagesSelected = groups.length > 0 && groups.every((group) => state.bulkSelectedPackageIds.has(group.id));
 
   return `
       <div class="toolbarBulkActions">
-        <button class="primaryButton" type="button" data-action="bulk-install-packages" ${selectedCount === 0 || selectedPackageCount === 0 ? "disabled" : ""}>
+        <button class="primaryButton" type="button" data-action="bulk-install-packages" ${selectedPackageCount === 0 ? "disabled" : ""}>
         ${state.actionBusy === "bulk" ? renderSpinner() : ""} ${state.activeTab === "updates" ? "Update" : "Consolidate"}
         </button>
         <button class="secondaryButton" type="button" data-action="toggle-all-bulk-packages" ${groups.length === 0 ? "disabled" : ""}>${allPackagesSelected ? "Unselect all" : "Select all"}</button>
@@ -1429,12 +1428,6 @@ function getBulkPackageItems() {
     return [];
   }
 
-  const selectedProjectIds = Array.from(state.selectedProjectIds);
-
-  if (selectedProjectIds.length === 0) {
-    return [];
-  }
-
   return getVisibleInstalledGroups()
     .filter((packageGroup) => state.bulkSelectedPackageIds.has(packageGroup.id))
     .map((packageGroup) => ({
@@ -1443,9 +1436,9 @@ function getBulkPackageItems() {
         state.activeTab === "updates"
           ? packageGroup.latestVersion || ""
           : packageGroup.versions[packageGroup.versions.length - 1] || "",
-      projectIds: selectedProjectIds
+      projectIds: packageGroup.projects.map((project) => project.projectId)
     }))
-    .filter((item) => item.version);
+    .filter((item) => item.version && item.projectIds.length > 0);
 }
 
 function loadMoreBrowsePackages() {
