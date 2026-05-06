@@ -249,6 +249,8 @@ function renderToolbar() {
   const consolidatedCount = state.installedPackages.filter((packageGroup) => !packageGroup.isConsolidated).length;
   const vulnerabilitiesCount = state.installedPackages.filter((packageGroup) => packageGroup.vulnerabilities.length > 0).length;
 
+  syncBulkPackageSelection();
+
   return `
     <header class="toolbar">
       <div class="tabs">
@@ -337,11 +339,11 @@ function renderInstalledPackages() {
   const groups = getVisibleInstalledGroups();
   const hasBulkSelection = state.activeTab === "updates" || state.activeTab === "consolidated";
 
+  syncBulkPackageSelection(groups);
+
   if (groups.length === 0) {
     return renderInstalledEmptyState(filter);
   }
-
-  syncBulkPackageSelection(groups);
 
   return `<div class="packageList">${groups
     .map(
