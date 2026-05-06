@@ -2,7 +2,7 @@
   "name": "dotnet-nuget",
   "displayName": "Semic NuGet(.NET)",
   "description": "Browse NuGet sources and inspect packages used by .NET projects loaded from .slnx files.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "semic",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,7 @@
     "csharp",
     "semic"
   ],
-  "icon": "media/icon.png",
+  "icon": "media/icon.webp",
   "main": "./dist/Extension.js",
   "contributes": {
     "configuration": {
@@ -64,7 +64,7 @@
         {
           "id": "semicDotnetNugetPanelContainer",
           "title": "NUGET",
-          "icon": "media/icon.png"
+          "icon": "media/icon.webp"
         }
       ]
     },
@@ -74,7 +74,7 @@
           "id": "semicDotnetNugetView",
           "name": "Packages",
           "type": "webview",
-          "icon": "media/icon.png"
+          "icon": "media/icon.webp"
         }
       ]
     },
@@ -105,7 +105,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/vscode": "^1.116.0",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vscode/vsce": "^3.9.0",
+    "@vscode/vsce": "^3.9.1",
     "concurrently": "^9.2.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
