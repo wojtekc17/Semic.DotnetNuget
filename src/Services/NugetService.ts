@@ -7,6 +7,7 @@ import {
   type BrowsePackageInfo,
   type BrowsePackagesPayload,
   type AddSourceRequest,
+  type BulkInstallPackageRequest,
   type InstallPackageRequest,
   type PackageDetailsPayload,
   type PackageVulnerabilityInfo,
@@ -76,6 +77,7 @@ export class NugetService {
     ]);
     const selectedSourceName = options.selectedSourceName || AllSourcesName;
     const installedPackages = BuildPackageGroups(scanResult.projects.flatMap((project) => project.packages));
+    await this.ApplyLatestVersions(installedPackages, sources, selectedSourceName, options.includePrerelease);
     await this.ApplyVulnerabilities(installedPackages, scanResult.projects);
 
     return {
@@ -296,6 +298,40 @@ export class NugetService {
     return `Installed ${request.packageId} in ${selectedProjects.length} project(s).`;
   }
 
+  public async BulkInstallPackages(request: BulkInstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
+    const sources = await this.ListSources();
+    const source =
+      request.sourceName === AllSourcesName || request.sourceName.trim().length === 0
+        ? undefined
+        : sources.find((candidate) => candidate.name === request.sourceName);
+    let operationCount = 0;
+
+    for (const item of request.items) {
+      const selectedProjects = projects.filter(
+        (project) =>
+          item.projectIds.includes(project.id) &&
+          project.packages.some((packageReference) => packageReference.id.toLowerCase() === item.packageId.toLowerCase())
+      );
+
+      for (const project of selectedProjects) {
+        const args = ["add", project.path, "package", item.packageId, "--version", item.version.trim()];
+
+        if (source?.url) {
+          args.push("--source", source.url);
+        }
+
+        await this.RunDotnet(args);
+        operationCount += 1;
+      }
+    }
+
+    if (operationCount === 0) {
+      throw new Error("No matching package references were found in the selected projects.");
+    }
+
+    return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s).`;
+  }
+
   public async UninstallPackage(request: UninstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
     const packageId = request.packageId.toLowerCase();
     const selectedProjects = projects.filter(
@@ -349,6 +385,38 @@ export class NugetService {
     packageGroups.forEach((packageGroup) => {
       packageGroup.vulnerabilities = vulnerabilitiesByPackage.get(packageGroup.id.toLowerCase()) ?? [];
     });
+  }
+
+  private async ApplyLatestVersions(
+    packageGroups: PackageGroupInfo[],
+    sources: NugetSource[],
+    selectedSourceName: string,
+    includePrerelease: boolean
+  ): Promise<void> {
+    const selectedSources = SelectPackageDetailsSources(sources, selectedSourceName);
+
+    await Promise.all(
+      packageGroups.map(async (packageGroup) => {
+        for (const source of selectedSources) {
+          try {
+            const versions = await FetchPackageVersions(source.url, packageGroup.id, includePrerelease);
+            const latestVersion = versions[0];
+
+            if (!latestVersion) {
+              continue;
+            }
+
+            packageGroup.latestVersion = latestVersion;
+            packageGroup.hasUpdate = packageGroup.versions.some((version) => CompareVersions(latestVersion, version) > 0);
+            return;
+          } catch {
+            // Try next source.
+          }
+        }
+
+        packageGroup.hasUpdate = false;
+      })
+    );
   }
 
   private async LoadProjectVulnerabilities(project: NugetWorkspacePayload["projects"][number]): Promise<Array<PackageVulnerabilityInfo & { packageId: string }>> {
@@ -594,6 +662,43 @@ async function FetchPackageDetails(sourceUrl: string, packageId: string, version
     readme,
     dependencies: NormalizeDependencyGroups(catalogEntry)
   };
+}
+
+async function FetchPackageVersions(sourceUrl: string, packageId: string, includePrerelease: boolean): Promise<string[]> {
+  const serviceIndex = await FetchServiceIndex(sourceUrl);
+  const registrationsBaseUrl = FindServiceResource(serviceIndex, "registrationsbaseurl")?.["@id"];
+
+  if (!registrationsBaseUrl) {
+    throw new Error("Selected NuGet source does not expose a registration endpoint.");
+  }
+
+  const normalizedBaseUrl = registrationsBaseUrl.endsWith("/") ? registrationsBaseUrl : `${registrationsBaseUrl}/`;
+  const encodedPackageId = encodeURIComponent(packageId.toLowerCase());
+  const index = await FetchJson<{
+    items?: Array<{
+      items?: NugetRegistrationLeaf[];
+      "@id"?: string;
+    }>;
+  }>(`${normalizedBaseUrl}${encodedPackageId}/index.json`);
+  const versions = new Set<string>();
+
+  for (const page of index.items ?? []) {
+    const pageItems = page.items ?? (page["@id"] ? (await FetchJson<{ items?: NugetRegistrationLeaf[] }>(page["@id"])).items ?? [] : []);
+
+    pageItems.forEach((item) => {
+      const version = GetCatalogEntryVersion(item.catalogEntry);
+
+      if (version && (includePrerelease || !IsPrereleaseVersion(version))) {
+        versions.add(version);
+      }
+    });
+  }
+
+  return Array.from(versions).sort((left, right) => CompareVersions(right, left));
+}
+
+function IsPrereleaseVersion(version: string): boolean {
+  return version.includes("-");
 }
 
 async function FetchRegistrationLeaf(registrationsBaseUrl: string, packageId: string, version: string): Promise<NugetRegistrationLeaf> {

@@ -232,6 +232,19 @@ select {
   max-width: 180px;
 }
 
+.toolbarBulkActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.toolbarBulkActions .primaryButton,
+.toolbarBulkActions .secondaryButton {
+  height: 27px;
+  padding: 4px 12px;
+}
+
 .toolbarSpacer {
   flex: 1;
 }
@@ -302,6 +315,43 @@ select {
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.packageSelectableRow {
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: stretch;
+  padding: 0;
+}
+
+.installedRow:not(.packageSelectableRow) {
+  display: block;
+  padding: 0;
+}
+
+.packageSelectableRow .packageContentButton {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px 12px 0;
+}
+
+.installedRow:not(.packageSelectableRow) .packageContentButton {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.installedRow.isSelected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.bulkPackageCheckbox {
+  align-self: center;
+  justify-self: center;
 }
 
 .packageButton {
@@ -600,6 +650,7 @@ select {
 }
 
 .secondaryButton:disabled,
+.primaryButton:disabled,
 .dangerButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;

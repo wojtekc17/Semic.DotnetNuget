@@ -146,6 +146,15 @@ export interface InstallPackageRequest {
   sourceName: string;
 }
 
+export interface BulkInstallPackageRequest {
+  items: Array<{
+    packageId: string;
+    version: string;
+    projectIds: string[];
+  }>;
+  sourceName: string;
+}
+
 export interface UninstallPackageRequest {
   packageId: string;
   projectIds: string[];
@@ -179,6 +188,7 @@ export type WebviewToExtensionMessage =
   | { type: "updateSource"; payload: UpdateSourceRequest }
   | { type: "removeSource"; payload: RemoveSourceRequest }
   | { type: "installPackage"; payload: InstallPackageRequest }
+  | { type: "bulkInstallPackages"; payload: BulkInstallPackageRequest }
   | { type: "uninstallPackage"; payload: UninstallPackageRequest }
   | { type: "openSettings" }
   | { type: "syncState"; payload: PanelClientState };

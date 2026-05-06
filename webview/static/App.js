@@ -8,6 +8,8 @@ const state = {
   selectedSourceName: "",
   selectedPackageId: "",
   selectedPackageVersion: "",
+  bulkSelectedPackageIds: new Set(),
+  bulkSelectionKey: "",
   previewTab: "readme",
   selectedProjectIds: new Set(),
   settingsOpen: false,
@@ -91,6 +93,8 @@ window.addEventListener("message", (event) => {
     state.statusMessage = message.payload.message;
     state.actionBusy = "";
     state.sourceActionName = "";
+    state.bulkSelectionKey = "";
+    syncBulkPackageSelection();
     preserveDetailsScroll = state.settingsOpen;
 
     if (wasSourceActionBusy) {
@@ -287,6 +291,7 @@ function renderToolbar() {
           <option ${state.selectedSourceName === ALL_SOURCES || !state.selectedSourceName ? "selected" : ""} value="${ALL_SOURCES}">All</option>
           ${state.sources.map((source) => `<option ${source.name === state.selectedSourceName ? "selected" : ""} value="${escapeAttribute(source.name)}">${escapeHtml(source.name)}</option>`).join("")}
         </select>
+        ${renderBulkPackageAction()}
       </div>
     </header>`;
 }
@@ -329,6 +334,47 @@ function renderBrowsePackages() {
 
 function renderInstalledPackages() {
   const filter = state.searchTerm.trim().toLowerCase();
+  const groups = getVisibleInstalledGroups();
+  const hasBulkSelection = state.activeTab === "updates" || state.activeTab === "consolidated";
+
+  if (groups.length === 0) {
+    return renderInstalledEmptyState(filter);
+  }
+
+  syncBulkPackageSelection(groups);
+
+  return `<div class="packageList">${groups
+    .map(
+      (packageGroup) => `
+        <div class="packageRow installedRow ${hasBulkSelection ? "packageSelectableRow" : ""} ${state.selectedPackageId === packageGroup.id ? "isSelected" : ""}">
+          ${renderBulkPackageCheckbox(packageGroup)}
+          <button class="packageButton packageContentButton" type="button" data-package-group="${escapeAttribute(packageGroup.id)}">
+          <div class="packageIcon"><span>.NET</span></div>
+          <div class="packageMain">
+            <h3>${escapeHtml(packageGroup.id)}</h3>
+            <p class="description">${packageGroup.projects.length} project(s)${packageGroup.vulnerabilities.length > 0 ? ` · ${packageGroup.vulnerabilities.length} vulnerable` : ""}</p>
+            <div class="projectChips">${packageGroup.projects
+              .slice(0, 5)
+              .map((project) => `<span>${escapeHtml(project.projectName)}</span>`)
+              .join("")}</div>
+          </div>
+          <strong class="versionText ${packageGroup.isConsolidated ? "" : "warningText"}">${escapeHtml(packageGroup.versions.join(", "))}</strong>
+          </button>
+        </div>`
+    )
+    .join("")}</div>`;
+}
+
+function renderBulkPackageCheckbox(packageGroup) {
+  if (state.activeTab !== "updates" && state.activeTab !== "consolidated") {
+    return "";
+  }
+
+  return `<input class="bulkPackageCheckbox" ${state.bulkSelectedPackageIds.has(packageGroup.id) ? "checked" : ""} type="checkbox" data-bulk-package="${escapeAttribute(packageGroup.id)}" aria-label="Select ${escapeAttribute(packageGroup.id)} for bulk action" />`;
+}
+
+function getVisibleInstalledGroups() {
+  const filter = state.searchTerm.trim().toLowerCase();
   let groups = state.installedPackages.filter((packageGroup) => {
     if (!filter) {
       return true;
@@ -349,27 +395,49 @@ function renderInstalledPackages() {
     groups = groups.filter((packageGroup) => packageGroup.vulnerabilities.length > 0);
   }
 
-  if (groups.length === 0) {
-    return renderEmpty("No installed packages found.", "PackageReference entries are loaded from projects listed in the .slnx file.");
+  return groups;
+}
+
+function renderBulkPackageAction(groups) {
+  if (state.activeTab !== "updates" && state.activeTab !== "consolidated") {
+    return "";
   }
 
-  return `<div class="packageList">${groups
-    .map(
-      (packageGroup) => `
-        <button class="packageRow packageButton installedRow ${state.selectedPackageId === packageGroup.id ? "isSelected" : ""}" type="button" data-package-group="${escapeAttribute(packageGroup.id)}">
-          <div class="packageIcon"><span>.NET</span></div>
-          <div class="packageMain">
-            <h3>${escapeHtml(packageGroup.id)}</h3>
-            <p class="description">${packageGroup.projects.length} project(s)${packageGroup.vulnerabilities.length > 0 ? ` · ${packageGroup.vulnerabilities.length} vulnerable` : ""}</p>
-            <div class="projectChips">${packageGroup.projects
-              .slice(0, 5)
-              .map((project) => `<span>${escapeHtml(project.projectName)}</span>`)
-              .join("")}</div>
-          </div>
-          <strong class="versionText ${packageGroup.isConsolidated ? "" : "warningText"}">${escapeHtml(packageGroup.versions.join(", "))}</strong>
-        </button>`
-    )
-    .join("")}</div>`;
+  groups = groups ?? getVisibleInstalledGroups();
+  const selectedCount = state.selectedProjectIds.size;
+  const selectedPackageCount = groups.filter((group) => state.bulkSelectedPackageIds.has(group.id)).length;
+  const allPackagesSelected = groups.length > 0 && groups.every((group) => state.bulkSelectedPackageIds.has(group.id));
+
+  return `
+      <div class="toolbarBulkActions">
+        <button class="primaryButton" type="button" data-action="bulk-install-packages" ${selectedCount === 0 || selectedPackageCount === 0 ? "disabled" : ""}>
+        ${state.actionBusy === "bulk" ? renderSpinner() : ""} ${state.activeTab === "updates" ? "Update" : "Consolidate"}
+        </button>
+        <button class="secondaryButton" type="button" data-action="toggle-all-bulk-packages" ${groups.length === 0 ? "disabled" : ""}>${allPackagesSelected ? "Unselect all" : "Select all"}</button>
+      </div>`;
+}
+
+function syncBulkPackageSelection(groups = getVisibleInstalledGroups()) {
+  if (state.activeTab !== "updates" && state.activeTab !== "consolidated") {
+    state.bulkSelectedPackageIds.clear();
+    state.bulkSelectionKey = "";
+    return;
+  }
+
+  const visibleIds = new Set(groups.map((group) => group.id));
+  const selectionKey = `${state.activeTab}|${state.searchTerm.trim().toLowerCase()}|${groups.map((group) => group.id).join("|")}`;
+  const shouldInitializeSelection = state.bulkSelectionKey !== selectionKey;
+
+  Array.from(state.bulkSelectedPackageIds).forEach((id) => {
+    if (!visibleIds.has(id)) {
+      state.bulkSelectedPackageIds.delete(id);
+    }
+  });
+
+  if (shouldInitializeSelection) {
+    state.bulkSelectedPackageIds = new Set(groups.map((group) => group.id));
+    state.bulkSelectionKey = selectionKey;
+  }
 }
 
 function renderDetails() {
@@ -465,7 +533,16 @@ function renderActionForm(versions, selectedVersion, installedVersion) {
       </div>`;
   }
 
-  if (state.activeTab === "installed" || state.activeTab === "consolidated") {
+  if (state.activeTab === "consolidated") {
+    return `
+      <div class="previewFormGrid installedFormGrid">
+        <label>Consolidate to:${versionSelect}</label>
+        <button class="primaryButton" type="button" data-action="install-package">${state.actionBusy === "install" ? renderSpinner() : ""} Consolidate</button>
+        ${uninstallButton}
+      </div>`;
+  }
+
+  if (state.activeTab === "installed") {
     return `
       <div class="previewFormGrid installedFormGrid">
         <label>Version:${versionSelect}</label>
@@ -610,18 +687,42 @@ function getSelectedPackageContext() {
     return undefined;
   }
 
-  const version = state.selectedPackageVersion || group.versions[group.versions.length - 1] || group.versions[0] || "";
+  const defaultVersion = state.activeTab === "updates" ? group.latestVersion || group.versions[group.versions.length - 1] : group.versions[group.versions.length - 1];
+  const version = state.selectedPackageVersion || defaultVersion || group.versions[0] || "";
+  const versions = state.activeTab === "updates" && group.latestVersion
+    ? Array.from(new Set([group.latestVersion, ...group.versions])).sort((left, right) => compareVersionsDesc(left, right))
+    : group.versions;
 
   return {
     id: group.id,
     version,
-    versions: group.versions.length > 0 ? group.versions : [version],
+    versions: versions.length > 0 ? versions : [version],
     description: `${group.projects.length} project(s) reference this package.`,
     authors: "",
     downloads: undefined,
     verified: false,
     projects: group.projects
   };
+}
+
+function renderInstalledEmptyState(filter) {
+  if (filter) {
+    return renderEmpty("No packages match the current filter.", "Clear the search box or try a different package name.");
+  }
+
+  if (state.activeTab === "updates") {
+    return renderEmpty("No updates found.", "All installed packages are already on the latest version available from the selected NuGet source.");
+  }
+
+  if (state.activeTab === "consolidated") {
+    return renderEmpty("No packages need consolidation.", "Installed package versions are already consistent across projects.");
+  }
+
+  if (state.activeTab === "vulnerabilities") {
+    return renderEmpty("No vulnerable packages found.", "No vulnerabilities were reported by the .NET CLI for the loaded projects.");
+  }
+
+  return renderEmpty("No installed packages found.", "No PackageReference entries were found in the loaded projects.");
 }
 
 function getLoadedPackageDetails(packageId, version) {
@@ -673,6 +774,13 @@ function formatDownloads(downloads) {
   }
 
   return String(downloads);
+}
+
+function compareVersionsDesc(left, right) {
+  return String(right).localeCompare(String(left), undefined, {
+    numeric: true,
+    sensitivity: "base"
+  });
 }
 
 function formatDate(value) {
@@ -925,6 +1033,10 @@ function inferBusyAction(message) {
     return "uninstall";
   }
 
+  if (lowered.includes("selected package references")) {
+    return "bulk";
+  }
+
   if (lowered.includes("install")) {
     return "install";
   }
@@ -1119,12 +1231,33 @@ function bindEvents() {
     element.addEventListener("click", () => {
       state.selectedPackageId = element.getAttribute("data-package-group");
       const selectedGroup = state.installedPackages.find((packageGroup) => packageGroup.id === state.selectedPackageId);
-      state.selectedPackageVersion = selectedGroup?.versions[selectedGroup.versions.length - 1] || selectedGroup?.versions[0] || "";
+      state.selectedPackageVersion =
+        state.activeTab === "updates"
+          ? selectedGroup?.latestVersion || selectedGroup?.versions[selectedGroup.versions.length - 1] || selectedGroup?.versions[0] || ""
+          : selectedGroup?.versions[selectedGroup.versions.length - 1] || selectedGroup?.versions[0] || "";
       state.selectedProjectIds = new Set((selectedGroup?.projects ?? []).map((project) => project.projectId));
       state.settingsOpen = false;
       state.previewTab = "readme";
       requestSelectedPackageDetails();
       render();
+    });
+  });
+
+  document.querySelectorAll("[data-bulk-package]").forEach((element) => {
+    element.addEventListener("change", (event) => {
+      const packageId = event.target.getAttribute("data-bulk-package");
+
+      if (!packageId) {
+        return;
+      }
+
+      if (event.target.checked) {
+        state.bulkSelectedPackageIds.add(packageId);
+      } else {
+        state.bulkSelectedPackageIds.delete(packageId);
+      }
+
+      render({ preserveContentScroll: true });
     });
   });
 
@@ -1171,6 +1304,8 @@ function bindEvents() {
       } else {
         state.selectedProjectIds.delete(projectId);
       }
+
+      render({ preserveDetailsScroll: true, preserveContentScroll: true });
     });
   });
 
@@ -1182,6 +1317,19 @@ function bindEvents() {
     }
 
     render();
+  });
+
+  document.querySelector('[data-action="toggle-all-bulk-packages"]')?.addEventListener("click", () => {
+    const visibleGroups = getVisibleInstalledGroups();
+    const allSelected = visibleGroups.length > 0 && visibleGroups.every((group) => state.bulkSelectedPackageIds.has(group.id));
+
+    if (allSelected) {
+      visibleGroups.forEach((group) => state.bulkSelectedPackageIds.delete(group.id));
+    } else {
+      visibleGroups.forEach((group) => state.bulkSelectedPackageIds.add(group.id));
+    }
+
+    render({ preserveContentScroll: true });
   });
 
   document.querySelector('[data-action="install-package"]')?.addEventListener("click", () => {
@@ -1198,6 +1346,29 @@ function bindEvents() {
         packageId: selectedPackage.id,
         version,
         projectIds: Array.from(state.selectedProjectIds),
+        sourceName: state.selectedSourceName
+      }
+    });
+  });
+
+  document.querySelector('[data-action="bulk-install-packages"]')?.addEventListener("click", () => {
+    const items = getBulkPackageItems();
+
+    if (items.length === 0) {
+      state.status = "error";
+      state.statusMessage = "Select projects and packages before running bulk update.";
+      render();
+      return;
+    }
+
+    state.actionBusy = "bulk";
+    state.status = "loading";
+    state.statusMessage = "Updating selected package references...";
+    render();
+    vscode.postMessage({
+      type: "bulkInstallPackages",
+      payload: {
+        items,
         sourceName: state.selectedSourceName
       }
     });
@@ -1251,6 +1422,30 @@ function bindEvents() {
       }
     });
   });
+}
+
+function getBulkPackageItems() {
+  if (state.activeTab !== "updates" && state.activeTab !== "consolidated") {
+    return [];
+  }
+
+  const selectedProjectIds = Array.from(state.selectedProjectIds);
+
+  if (selectedProjectIds.length === 0) {
+    return [];
+  }
+
+  return getVisibleInstalledGroups()
+    .filter((packageGroup) => state.bulkSelectedPackageIds.has(packageGroup.id))
+    .map((packageGroup) => ({
+      packageId: packageGroup.id,
+      version:
+        state.activeTab === "updates"
+          ? packageGroup.latestVersion || ""
+          : packageGroup.versions[packageGroup.versions.length - 1] || "",
+      projectIds: selectedProjectIds
+    }))
+    .filter((item) => item.version);
 }
 
 function loadMoreBrowsePackages() {

@@ -161,6 +161,16 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
           await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Package install failed." } });
         }
         break;
+      case "bulkInstallPackages":
+        try {
+          await this.PostMessage({ type: "busyState", payload: { status: "loading", message: "Updating selected package references..." } });
+          const bulkMessage = await this.nugetService.BulkInstallPackages(message.payload, this.projects);
+          await this.PostMessage({ type: "busyState", payload: { status: "success", message: bulkMessage } });
+          await this.Refresh();
+        } catch (error) {
+          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Bulk package update failed." } });
+        }
+        break;
       case "uninstallPackage":
         try {
           await this.PostMessage({ type: "busyState", payload: { status: "loading", message: `Uninstalling ${message.payload.packageId}...` } });
