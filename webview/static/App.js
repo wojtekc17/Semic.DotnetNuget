@@ -187,7 +187,11 @@ function scheduleBrowse(options = {}) {
     state.status = "loading";
     state.statusMessage = options.append ? "Loading more packages..." : "Loading packages...";
 
-    render({ focusSearch: Boolean(options.focusSearch), preserveDetailsScroll: Boolean(options.preserveDetailsScroll) });
+    render({
+      focusSearch: Boolean(options.focusSearch),
+      preserveDetailsScroll: Boolean(options.preserveDetailsScroll),
+      preserveContentScroll: Boolean(options.preserveContentScroll || options.append)
+    });
   }
 
   browseTimer = window.setTimeout(() => {
@@ -1110,13 +1114,23 @@ function bindEvents() {
   document.querySelector('[data-input="search"]')?.addEventListener("input", (event) => {
     state.searchTerm = event.target.value;
     syncState();
-    scheduleBrowse();
+
+    if (state.activeTab === "browse") {
+      scheduleBrowse();
+    } else {
+      render({ focusSearch: true, preserveContentScroll: true, preserveDetailsScroll: true });
+    }
   });
 
   document.querySelector('[data-action="clear-search"]')?.addEventListener("click", () => {
     state.searchTerm = "";
     syncState();
-    scheduleBrowse({ immediate: true, renderLoading: true, focusSearch: true });
+
+    if (state.activeTab === "browse") {
+      scheduleBrowse({ immediate: true, renderLoading: true, focusSearch: true });
+    } else {
+      render({ focusSearch: true, preserveDetailsScroll: true });
+    }
   });
 
   document.querySelector('[data-input="prerelease"]')?.addEventListener("change", (event) => {
