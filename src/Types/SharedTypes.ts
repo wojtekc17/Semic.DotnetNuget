@@ -46,6 +46,7 @@ export interface PackageDependencyGroupInfo {
 export interface PackageDetailsInfo {
   id: string;
   version: string;
+  availableVersions: string[];
   sourceName?: string;
   description: string;
   authors: string;
@@ -180,7 +181,7 @@ export type WebviewToExtensionMessage =
   | { type: "ready" }
   | { type: "refresh" }
   | { type: "browsePackages"; payload: { query: string; includePrerelease: boolean; sourceName: string; skip: number; take: number; append: boolean } }
-  | { type: "loadPackageDetails"; payload: { packageId: string; version: string; sourceName: string } }
+  | { type: "loadPackageDetails"; payload: { packageId: string; version: string; sourceName: string; includePrerelease: boolean } }
   | { type: "selectSource"; payload: { sourceName: string } }
   | { type: "setWorkspaceSolution"; payload: { solutionPath: string } }
   | { type: "setUseAllProjects"; payload: { useAllProjects: boolean } }

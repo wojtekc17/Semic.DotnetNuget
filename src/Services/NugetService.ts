@@ -54,8 +54,15 @@ type ServiceIndex = {
   resources?: ServiceIndexResource[];
 };
 
+class OperationError extends Error {
+  public constructor(message: string, public readonly details?: string) {
+    super(message);
+    this.name = "OperationError";
+  }
+}
+
 export class NugetService {
-  public constructor(private readonly scanner: WorkspaceScanner, private readonly dotnetCliHome: string) {}
+  public constructor(private readonly scanner: WorkspaceScanner, private readonly dotnetCliHome: string) { }
 
   public async SelectWorkspaceSolution(): Promise<boolean> {
     return await this.scanner.SelectSolutionFromWorkspace();
@@ -178,7 +185,7 @@ export class NugetService {
     }
   }
 
-  public async LoadPackageDetails(packageId: string, version: string, sourceName: string): Promise<PackageDetailsPayload> {
+  public async LoadPackageDetails(packageId: string, version: string, sourceName: string, includePrerelease: boolean): Promise<PackageDetailsPayload> {
     const sources = await this.ListSources();
     const candidateSources = SelectPackageDetailsSources(sources, sourceName);
     const errors: string[] = [];
@@ -190,7 +197,7 @@ export class NugetService {
     let bestResult: { details: PackageDetailsPayload["details"]; sourceName: string } | undefined;
     for (const source of candidateSources) {
       try {
-        const details = await FetchPackageDetails(source.url, packageId, version);
+        const details = await FetchPackageDetails(source.url, packageId, version, includePrerelease);
         const result = { details, sourceName: source.name };
 
         if (!bestResult || ScorePackageDetails(result.details) > ScorePackageDetails(bestResult.details)) {
@@ -305,6 +312,7 @@ export class NugetService {
         ? undefined
         : sources.find((candidate) => candidate.name === request.sourceName);
     let operationCount = 0;
+    const failures: string[] = [];
 
     for (const item of request.items) {
       const selectedProjects = projects.filter(
@@ -320,13 +328,25 @@ export class NugetService {
           args.push("--source", source.url);
         }
 
-        await this.RunDotnet(args);
-        operationCount += 1;
+        try {
+          await this.RunDotnet(args);
+          operationCount += 1;
+        } catch (error) {
+          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, args, error));
+        }
       }
     }
 
-    if (operationCount === 0) {
+    if (operationCount === 0 && failures.length === 0) {
       throw new Error("No matching package references were found in the selected projects.");
+    }
+
+    if (failures.length > 0) {
+      const message =
+        operationCount > 0
+          ? `Updated ${operationCount} project reference(s), but ${failures.length} update operation(s) failed.`
+          : `No package references were updated. ${failures.length} update operation(s) failed.`;
+      throw new OperationError(message, failures.join("\n\n"));
     }
 
     return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s).`;
@@ -460,6 +480,60 @@ export class NugetService {
       maxBuffer: 1024 * 1024 * 4
     });
   }
+
+  private FormatCommandFailure(context: string, args: string[], error: unknown): string {
+    const parts = [context, `Command: dotnet ${args.map(QuoteShellArg).join(" ")}`];
+    const details = ExtractDotnetErrorDetails(error);
+
+    if (details) {
+      parts.push(details);
+    }
+
+    return parts.join("\n");
+  }
+}
+
+function ExtractDotnetErrorDetails(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Unknown error.";
+  }
+
+  const candidate = error as Error & {
+    stdout?: string;
+    stderr?: string;
+    code?: number | string;
+    signal?: string;
+    cmd?: string;
+  };
+  const parts: string[] = [];
+  const stderr = candidate.stderr?.trim();
+  const stdout = candidate.stdout?.trim();
+
+  if (candidate.code !== undefined) {
+    parts.push(`Exit code: ${String(candidate.code)}`);
+  }
+
+  if (candidate.signal) {
+    parts.push(`Signal: ${candidate.signal}`);
+  }
+
+  if (stderr) {
+    parts.push(`stderr:\n${stderr}`);
+  }
+
+  if (stdout) {
+    parts.push(`stdout:\n${stdout}`);
+  }
+
+  if (parts.length === 0) {
+    parts.push(error.message);
+  }
+
+  return parts.join("\n");
+}
+
+function QuoteShellArg(value: string): string {
+  return /[\s"]/u.test(value) ? `"${value.replaceAll("\"", '\\\"')}"` : value;
 }
 
 function BuildPackageGroups(packages: NugetWorkspacePayload["projects"][number]["packages"]): PackageGroupInfo[] {
@@ -570,9 +644,9 @@ function SelectPackageDetailsSources(sources: NugetSource[], sourceName: string)
     sourceName === AllSourcesName || sourceName.trim().length === 0
       ? enabledHttpSources
       : [
-          ...enabledHttpSources.filter((source) => source.name === sourceName),
-          ...enabledHttpSources.filter((source) => source.name !== sourceName)
-        ];
+        ...enabledHttpSources.filter((source) => source.name === sourceName),
+        ...enabledHttpSources.filter((source) => source.name !== sourceName)
+      ];
   const unique = new Map<string, NugetSource>();
 
   ordered.forEach((source) => {
@@ -634,7 +708,7 @@ async function SearchSource(sourceUrl: string, query: string, includePrerelease:
   }));
 }
 
-async function FetchPackageDetails(sourceUrl: string, packageId: string, version: string): Promise<PackageDetailsPayload["details"]> {
+async function FetchPackageDetails(sourceUrl: string, packageId: string, version: string, includePrerelease: boolean): Promise<PackageDetailsPayload["details"]> {
   const serviceIndex = await FetchServiceIndex(sourceUrl);
   const registrationsBaseUrl = FindServiceResource(serviceIndex, "registrationsbaseurl")?.["@id"];
 
@@ -645,12 +719,14 @@ async function FetchPackageDetails(sourceUrl: string, packageId: string, version
   const registration = await FetchRegistrationLeaf(registrationsBaseUrl, packageId, version);
   const catalogEntry = await ResolveCatalogEntry(registration.catalogEntry);
   const resolvedVersion = catalogEntry.version ?? version;
+  const availableVersions = await FetchPackageVersions(sourceUrl, packageId, includePrerelease);
   const readmeUrl = catalogEntry.readmeUrl || BuildReadmeUrl(FindServiceResource(serviceIndex, "readmeuritemplate")?.["@id"], packageId, resolvedVersion);
   const readme = readmeUrl ? await TryFetchText(readmeUrl) : "";
 
   return {
     id: catalogEntry.id ?? packageId,
     version: resolvedVersion,
+    availableVersions,
     description: catalogEntry.description ?? "",
     authors: Array.isArray(catalogEntry.authors) ? catalogEntry.authors.join(", ") : catalogEntry.authors ?? "",
     license: catalogEntry.licenseExpression || catalogEntry.licenseUrl || "",

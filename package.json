@@ -2,7 +2,7 @@
   "name": "dotnet-nuget",
   "displayName": "Semic NuGet(.NET)",
   "description": "Browse NuGet sources and inspect packages used by .NET projects loaded from .slnx files.",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "publisher": "semic",
   "license": "MIT",
   "repository": {
@@ -92,14 +92,16 @@
     "vscode:prepublish": "npm run compile",
     "compile": "npm run build:webview && tsc -p .",
     "watch": "concurrently \"tsc -w -p .\" \"npm run build:webview -- --watch\"",
-    "build:webview": "node scripts/build-webview.mjs",
-    "watch:webview": "node scripts/build-webview.mjs --watch",
-    "package": "npm run compile && vsce package --githubBranch master --no-dependencies",
-    "publish:marketplace": "vsce publish --githubBranch master",
+    "build:webview": "vite build --configLoader native",
+    "dev:webview": "vite --configLoader native --host 127.0.0.1",
+    "watch:webview": "vite build --configLoader native --watch",
+    "test:webview": "playwright test",
+    "package": "npm run compile && vsce package --githubBranch master --readme-path README.md --changelog-path CHANGELOG.md --no-dependencies",
+    "publish:marketplace": "vsce publish --githubBranch master --readme-path README.md --changelog-path CHANGELOG.md",
     "lint": "tsc --noEmit -p . && tsc --noEmit -p webview/tsconfig.json"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -111,5 +113,9 @@
     "react-dom": "^19.2.5",
     "typescript": "^6.0.2",
     "vite": "^8.0.8"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.2",
+    "marked": "^18.0.3"
   }
 }

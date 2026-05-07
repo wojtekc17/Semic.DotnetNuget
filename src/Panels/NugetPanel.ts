@@ -58,18 +58,20 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
     );
   }
 
-  public async Refresh(): Promise<void> {
+  public async Refresh(options?: { preserveBusyState?: boolean }): Promise<void> {
     if (!this.webviewView) {
       return;
     }
 
-    await this.PostMessage({
-      type: "busyState",
-      payload: {
-        status: "loading",
-        message: "Loading .slnx projects and NuGet sources..."
-      }
-    });
+    if (!options?.preserveBusyState) {
+      await this.PostMessage({
+        type: "busyState",
+        payload: {
+          status: "loading",
+          message: "Loading workspace projects and NuGet sources..."
+        }
+      });
+    }
 
     try {
       const payload = await this.nugetService.LoadWorkspace(this.clientState.options);
@@ -155,8 +157,8 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         try {
           await this.PostMessage({ type: "busyState", payload: { status: "loading", message: `Installing ${message.payload.packageId}...` } });
           const installMessage = await this.nugetService.InstallPackage(message.payload, this.projects);
+          await this.Refresh({ preserveBusyState: true });
           await this.PostMessage({ type: "busyState", payload: { status: "success", message: installMessage } });
-          await this.Refresh();
         } catch (error) {
           await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Package install failed." } });
         }
@@ -165,18 +167,22 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         try {
           await this.PostMessage({ type: "busyState", payload: { status: "loading", message: "Updating selected package references..." } });
           const bulkMessage = await this.nugetService.BulkInstallPackages(message.payload, this.projects);
+          await this.Refresh({ preserveBusyState: true });
           await this.PostMessage({ type: "busyState", payload: { status: "success", message: bulkMessage } });
-          await this.Refresh();
         } catch (error) {
-          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Bulk package update failed." } });
+          const details = error instanceof Error && "details" in error && typeof (error as { details?: unknown }).details === "string"
+            ? (error as { details: string }).details
+            : undefined;
+          await this.Refresh({ preserveBusyState: true });
+          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Bulk package update failed.", details } });
         }
         break;
       case "uninstallPackage":
         try {
           await this.PostMessage({ type: "busyState", payload: { status: "loading", message: `Uninstalling ${message.payload.packageId}...` } });
           const uninstallMessage = await this.nugetService.UninstallPackage(message.payload, this.projects);
+          await this.Refresh({ preserveBusyState: true });
           await this.PostMessage({ type: "busyState", payload: { status: "success", message: uninstallMessage } });
-          await this.Refresh();
         } catch (error) {
           await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Package uninstall failed." } });
         }
@@ -202,7 +208,8 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
           const result = await this.nugetService.LoadPackageDetails(
             message.payload.packageId,
             message.payload.version,
-            message.payload.sourceName
+            message.payload.sourceName,
+            message.payload.includePrerelease
           );
           await this.PostMessage({ type: "packageDetailsLoaded", payload: result });
         } catch (error) {

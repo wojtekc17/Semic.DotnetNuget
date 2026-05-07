@@ -23,6 +23,33 @@ Visual Studio Code extension for browsing NuGet v3 feeds and managing packages u
 - Shows installed packages, updates, consolidated version differences and vulnerabilities.
 - Installs, updates and uninstalls packages through the .NET CLI.
 
+## Architecture
+
+At a higher level, the extension sits between the developer workspace and NuGet sources, giving one place to inspect package state and apply changes across projects.
+
+```mermaid
+flowchart LR
+  Dev[Developer] --> Ext[Semic NuGet extension]
+  Ext --> Insights[Package visibility\ninstalled, updates, vulnerabilities]
+  Ext --> Actions[Package actions\ninstall, update, uninstall]
+  Ext --> Config[Source and workspace\nselection]
+
+  Workspace[.NET workspace\nsolutions and projects] --> Ext
+  Feeds[NuGet sources\npublic or private] --> Ext
+  Ext --> Dotnet[dotnet CLI and NuGet APIs]
+
+  Insights --> Outcome[Safer and faster\npackage maintenance]
+  Actions --> Outcome
+  Config --> Outcome
+```
+
+In implementation terms:
+
+- `webview/src/App.tsx` and `webview/src/Components/*` render the interface and keep UI state.
+- `src/Panels/NugetPanel.ts` is the bridge between the UI and the extension host.
+- `src/Services/*` contains the workspace scanning, project parsing and NuGet operations.
+- `src/Types/SharedTypes.ts` defines the message contract shared by both sides.
+
 ## Workspace Loading
 
 On first run, the extension tries to find the first least-nested `.sln` or `.slnx` file in the workspace. If no solution file exists, it falls back to scanning all `.csproj` files.

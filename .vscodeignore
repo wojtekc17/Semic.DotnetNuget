@@ -9,6 +9,7 @@ vite.config.ts
 .dotnet-cli-home/**
 extension/**
 scripts/**
+release-notes-*.md
 webview/static/**
 media/demo.gif
 media/*.svg

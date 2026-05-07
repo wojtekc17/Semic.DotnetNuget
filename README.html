@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Semic NuGet &lpar;&period;NET&rpar;</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <h1 id="semic-nuget-net">Semic NuGet (.NET)</h1>
+<p>Visual Studio Code extension for browsing NuGet v3 feeds and managing packages used by .NET projects in the current workspace.</p>
+<h2 id="demo">Demo</h2>
+<p><img src="file:///g:\vscode-extensions\Semic.DotnetNuget\media\demo.gif" alt="Semic Version Changer demo"></p>
+<h2 id="features">Features</h2>
+<ul>
+<li>Opens a dedicated <code>NUGET</code> panel in the VS Code panel area.</li>
+<li>Loads projects from a selected <code>.sln</code> or <code>.slnx</code> file.</li>
+<li>Can scan all <code>.csproj</code> files in the workspace when solution-based loading is disabled.</li>
+<li>Stores workspace project loading settings under shared <code>semicDotnet.workspace.*</code> settings, so other Semic .NET extensions can use the same solution/project mode.</li>
+<li>Reads <code>PackageReference</code> entries from projects.</li>
+<li>Supports central package versions from the nearest <code>Directory.Packages.props</code>.</li>
+<li>Reads NuGet sources through <code>dotnet nuget list source</code>.</li>
+<li>Supports adding, updating and removing NuGet sources from the settings panel.</li>
+<li>Searches HTTP NuGet v3 sources from the Browse tab.</li>
+<li>Supports source selection, including <code>All</code> enabled sources.</li>
+<li>Shows package details, README, versions, dependencies, downloads and verified status when available from the feed.</li>
+<li>Shows installed packages, updates, consolidated version differences and vulnerabilities.</li>
+<li>Installs, updates and uninstalls packages through the .NET CLI.</li>
+</ul>
+<h2 id="architecture">Architecture</h2>
+<p>The extension is split into two runtime parts:</p>
+<ul>
+<li><code>src/</code> contains the VS Code extension host code.</li>
+<li><code>webview/</code> contains the React UI rendered inside the NuGet panel.</li>
+</ul>
+<pre><code class="language-mermaid">flowchart LR
+  User[User in VS Code] --&gt; View[NuGet Webview UI\nwebview/src]
+  View --&gt;|postMessage| Panel[NugetPanel\nsrc/Panels/NugetPanel.ts]
+  Panel --&gt;|calls| Service[NugetService\nsrc/Services]
+  Service --&gt;|reads projects| Workspace[.sln / .slnx / .csproj]
+  Service --&gt;|calls| Dotnet[dotnet CLI / NuGet v3 feeds]
+  Panel --&gt;|stateChanged / workspaceLoaded / browsePackagesLoaded| View
+
+  Shared[SharedTypes\nsrc/Types/SharedTypes.ts] --- Panel
+  Shared --- View
+</code></pre>
+<p>In practice:</p>
+<ul>
+<li><code>webview/src/App.tsx</code> and <code>webview/src/Components/*</code> render the interface and keep UI state.</li>
+<li><code>src/Panels/NugetPanel.ts</code> is the bridge between the UI and the extension host.</li>
+<li><code>src/Services/*</code> contains the workspace scanning, project parsing and NuGet operations.</li>
+<li><code>src/Types/SharedTypes.ts</code> defines the message contract shared by both sides.</li>
+</ul>
+<h2 id="workspace-loading">Workspace Loading</h2>
+<p>On first run, the extension tries to find the first least-nested <code>.sln</code> or <code>.slnx</code> file in the workspace. If no solution file exists, it falls back to scanning all <code>.csproj</code> files.</p>
+<p>After the first run, the selected mode is stored in workspace settings and is reused on later starts.</p>
+<p>Shared settings:</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;semicDotnet.workspace.useAllProjects&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">false</span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;semicDotnet.workspace.discoveryInitialized&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-keyword">true</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p>These settings are stored globally. The selected <code>.sln</code> or <code>.slnx</code> path is session-only and is not persisted to settings. After restarting VS Code, the extension discovers the least-nested solution again unless <code>Use all .csproj projects</code> is enabled.</p>
+<p>You can change the project loading mode from the extension settings panel under the gear icon:</p>
+<ul>
+<li><code>Use all .csproj projects</code> disables solution-based loading.</li>
+<li>The <code>Solution</code> dropdown lets you choose a <code>.sln</code> or <code>.slnx</code> file for the current VS Code session when solution-based loading is enabled.</li>
+</ul>
+<h2 id="nuget-sources">NuGet Sources</h2>
+<p>The extension reads sources from:</p>
+<pre><code class="language-bash">dotnet nuget list <span class="hljs-built_in">source</span>
+</code></pre>
+<p>Default source setting:</p>
+<pre><code class="language-json"><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;semicDotnetNuget.source&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;__all__&quot;</span>
+<span class="hljs-punctuation">}</span>
+</code></pre>
+<p>Use <code>__all__</code> to search all enabled HTTP NuGet v3 sources.</p>
+<p>Only HTTP NuGet v3 feeds expose searchable package metadata, README and package details in the Browse/details views. Local/offline sources can still be listed and used by the .NET CLI where supported.</p>
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>VS Code 1.116+</li>
+<li>.NET SDK available on <code>PATH</code></li>
+<li>Node.js 20+ for development</li>
+</ul>
+<h2 id="development">Development</h2>
+<p>Install dependencies:</p>
+<pre><code class="language-bash">npm install
+</code></pre>
+<p>Run validation:</p>
+<pre><code class="language-bash">npm run lint
+</code></pre>
+<p>Build extension host and webview assets:</p>
+<pre><code class="language-bash">npm run compile
+</code></pre>
+<p>Package VSIX:</p>
+<pre><code class="language-bash">npm run package
+</code></pre>
+<p>Start local development:</p>
+<ol>
+<li>Open this folder in VS Code.</li>
+<li>Run <code>npm run compile</code>.</li>
+<li>Press <code>F5</code>.</li>
+<li>In the Extension Development Host run <code>Semic NuGet: Open</code>.</li>
+</ol>
+<h2 id="commands">Commands</h2>
+<ul>
+<li><code>Semic NuGet: Open</code></li>
+<li><code>Semic NuGet: Refresh</code></li>
+</ul>
+
+            
+            
+        </body>
+        </html>
