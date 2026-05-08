@@ -25,9 +25,12 @@ export function Toolbar(props: {
   onToggleSettings: () => void;
   onToggleVisibleBulkPackages: () => void;
 }) {
-  const updatesCount = props.installedPackages.filter((packageGroup) => packageGroup.hasUpdate).length;
+  const updatesCount = props.installedPackages.filter((packageGroup) => packageGroup.hasUpdateInAllSources ?? packageGroup.hasUpdate).length;
   const consolidatedCount = props.installedPackages.filter((packageGroup) => !packageGroup.isConsolidated).length;
   const vulnerabilitiesCount = props.installedPackages.filter((packageGroup) => packageGroup.vulnerabilities.length > 0).length;
+  const sourceProblemCount = props.sources.filter((source) => source.enabled && source.healthStatus === "error").length;
+  const disabledSourceProblemCount = props.sources.filter((source) => !source.enabled && source.healthStatus === "error").length;
+  const selectableSources = props.sources.filter((source) => source.enabled && source.healthStatus !== "error");
   const selectedPackageCount = props.visibleGroups.filter((group) => props.bulkSelectedPackageIds.has(group.id)).length;
   const allPackagesSelected = props.visibleGroups.length > 0 && props.visibleGroups.every((group) => props.bulkSelectedPackageIds.has(group.id));
 
@@ -45,7 +48,7 @@ export function Toolbar(props: {
         })}
         <button className="iconButton refreshButton" type="button" title="Refresh" onClick={props.onRefresh}>{props.actionBusy === "refresh" ? <Spinner /> : null}</button>
         <button className={`iconButton infoButton ${props.infoOpen ? "isActive" : ""}`} type="button" title="Info" onClick={props.onToggleInfo}>i</button>
-        <button className={`iconButton gearButton ${props.settingsOpen ? "isActive" : ""}`} type="button" title="Settings" onClick={props.onToggleSettings}>Settings</button>
+        <button className={`iconButton gearButton ${props.settingsOpen ? "isActive" : ""}`} type="button" title="Settings" onClick={props.onToggleSettings}>Settings{disabledSourceProblemCount > 0 ? <span className="toolbarWarningBadge" aria-label="Disabled source problems">!</span> : null}{sourceProblemCount > 0 ? <span className="toolbarAlertBadge">{sourceProblemCount}</span> : null}</button>
       </div>
       <div className="filters">
         <div className="searchBox">
@@ -59,7 +62,7 @@ export function Toolbar(props: {
         <span className="toolbarSpacer" />
         <select className="sourceSelect toolbarSourceSelect" aria-label="NuGet source" value={props.selectedSourceName || ALL_SOURCES} onChange={(event) => props.onChangeSource(event.target.value)}>
           <option value={ALL_SOURCES}>All</option>
-          {props.sources.map((source) => <option key={source.name} value={source.name}>{source.name}</option>)}
+          {selectableSources.map((source) => <option key={source.name} value={source.name}>{source.name}</option>)}
         </select>
         {(props.activeTab === "updates" || props.activeTab === "consolidated") ? (
           <div className="toolbarBulkActions">

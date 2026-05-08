@@ -6,9 +6,31 @@ import type { SelectedPackageContext } from "./AppTypes";
 import { ALL_SOURCES } from "./Constants/AppConstants";
 import type { BrowsePackageInfo, PackageGroupInfo, TabKey } from "./Types";
 
-export function getVisibleInstalledGroups(installedPackages: PackageGroupInfo[], activeTab: TabKey, searchTerm: string) {
+export function getLatestVersionForSource(packageGroup: PackageGroupInfo, selectedSourceName: string) {
+    if (selectedSourceName === ALL_SOURCES || !selectedSourceName) {
+        return packageGroup.latestVersionInAllSources || packageGroup.latestVersion;
+    }
+
+    return packageGroup.latestVersionBySource?.[selectedSourceName] || packageGroup.latestVersion;
+}
+
+export function hasUpdateForSource(packageGroup: PackageGroupInfo, selectedSourceName: string) {
+    const latestVersion = getLatestVersionForSource(packageGroup, selectedSourceName);
+
+    return latestVersion ? packageGroup.versions.some((version) => version !== latestVersion && compareVersions(latestVersion, version) > 0) : false;
+}
+
+export function getVisibleInstalledGroups(installedPackages: PackageGroupInfo[], activeTab: TabKey, searchTerm: string, selectedSourceName: string) {
     const filter = searchTerm.trim().toLowerCase();
     let groups = installedPackages.filter((packageGroup) => {
+        const isAvailableInSelectedSource = packageGroup.availableSourceNames
+            ? packageGroup.availableSourceNames.includes(selectedSourceName)
+            : packageGroup.availableInSelectedSource !== false;
+
+        if (selectedSourceName !== ALL_SOURCES && !isAvailableInSelectedSource) {
+            return false;
+        }
+
         if (!filter) {
             return true;
         }
@@ -21,7 +43,7 @@ export function getVisibleInstalledGroups(installedPackages: PackageGroupInfo[],
     }
 
     if (activeTab === "updates") {
-        groups = groups.filter((packageGroup) => packageGroup.hasUpdate);
+        groups = groups.filter((packageGroup) => packageGroup.latestVersionBySource ? hasUpdateForSource(packageGroup, selectedSourceName) : Boolean(packageGroup.hasUpdate));
     }
 
     if (activeTab === "vulnerabilities") {
@@ -31,7 +53,7 @@ export function getVisibleInstalledGroups(installedPackages: PackageGroupInfo[],
     return groups;
 }
 
-export function getSelectedPackageContext(activeTab: TabKey, selectedPackageId: string, selectedPackageVersion: string, browsePackages: BrowsePackageInfo[], installedPackages: PackageGroupInfo[]): SelectedPackageContext | undefined {
+export function getSelectedPackageContext(activeTab: TabKey, selectedPackageId: string, selectedPackageVersion: string, browsePackages: BrowsePackageInfo[], installedPackages: PackageGroupInfo[], selectedSourceName: string): SelectedPackageContext | undefined {
     if (!selectedPackageId) {
         return undefined;
     }
@@ -55,8 +77,9 @@ export function getSelectedPackageContext(activeTab: TabKey, selectedPackageId: 
         return undefined;
     }
 
-    const defaultVersion = activeTab === "updates" ? group.latestVersion || group.versions.at(-1) || group.versions[0] || "" : group.versions.at(-1) || group.versions[0] || "";
-    const versions = activeTab === "updates" && group.latestVersion ? [group.latestVersion, ...group.versions.filter((version) => version !== group.latestVersion)] : group.versions;
+    const latestVersion = getLatestVersionForSource(group, selectedSourceName);
+    const defaultVersion = activeTab === "updates" ? latestVersion || group.versions.at(-1) || group.versions[0] || "" : group.versions.at(-1) || group.versions[0] || "";
+    const versions = activeTab === "updates" && latestVersion ? [latestVersion, ...group.versions.filter((version) => version !== latestVersion)] : group.versions;
 
     return {
         id: group.id,
@@ -67,7 +90,7 @@ export function getSelectedPackageContext(activeTab: TabKey, selectedPackageId: 
     };
 }
 
-export function getBulkPackageItems(activeTab: TabKey, visibleGroups: PackageGroupInfo[], bulkSelectedPackageIds: Set<string>) {
+export function getBulkPackageItems(activeTab: TabKey, visibleGroups: PackageGroupInfo[], bulkSelectedPackageIds: Set<string>, selectedSourceName: string) {
     if (activeTab !== "updates" && activeTab !== "consolidated") {
         return [];
     }
@@ -76,10 +99,40 @@ export function getBulkPackageItems(activeTab: TabKey, visibleGroups: PackageGro
         .filter((packageGroup) => bulkSelectedPackageIds.has(packageGroup.id))
         .map((packageGroup) => ({
             packageId: packageGroup.id,
-            version: activeTab === "updates" ? packageGroup.latestVersion || "" : packageGroup.versions.at(-1) || "",
+            version: activeTab === "updates" ? getLatestVersionForSource(packageGroup, selectedSourceName) || "" : packageGroup.versions.at(-1) || "",
             projectIds: packageGroup.projects.map((project) => project.projectId)
         }))
         .filter((item) => item.version && item.projectIds.length > 0);
+}
+
+function compareVersions(left: string, right: string) {
+    const leftParts = left.split(/[.-]/u);
+    const rightParts = right.split(/[.-]/u);
+    const length = Math.max(leftParts.length, rightParts.length);
+
+    for (let index = 0; index < length; index += 1) {
+        const leftPart = leftParts[index] ?? "0";
+        const rightPart = rightParts[index] ?? "0";
+        const leftNumber = Number(leftPart);
+        const rightNumber = Number(rightPart);
+        const bothNumeric = Number.isFinite(leftNumber) && Number.isFinite(rightNumber) && leftPart.trim() !== "" && rightPart.trim() !== "";
+
+        if (bothNumeric) {
+            if (leftNumber !== rightNumber) {
+                return leftNumber - rightNumber;
+            }
+
+            continue;
+        }
+
+        const result = leftPart.localeCompare(rightPart, undefined, { sensitivity: "base" });
+
+        if (result !== 0) {
+            return result;
+        }
+    }
+
+    return 0;
 }
 
 export function toggleVisibleBulkPackages(visibleGroups: PackageGroupInfo[], setBulkSelectedPackageIds: Dispatch<SetStateAction<Set<string>>>) {

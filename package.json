@@ -2,7 +2,7 @@
   "name": "dotnet-nuget",
   "displayName": "Semic NuGet(.NET)",
   "description": "Browse NuGet sources and inspect packages used by .NET projects loaded from .slnx files.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "semic",
   "license": "MIT",
   "repository": {

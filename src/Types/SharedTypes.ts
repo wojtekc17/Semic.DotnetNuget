@@ -5,6 +5,8 @@ export interface NugetSource {
   name: string;
   url: string;
   enabled: boolean;
+  healthStatus?: "ok" | "error" | "unknown";
+  healthMessage?: string;
 }
 
 export interface PackageReferenceInfo {
@@ -64,8 +66,13 @@ export interface PackageGroupInfo {
   id: string;
   versions: string[];
   projects: PackageReferenceInfo[];
+  availableInSelectedSource?: boolean;
+  availableSourceNames?: string[];
   latestVersion?: string;
+  latestVersionBySource?: Record<string, string>;
+  latestVersionInAllSources?: string;
   hasUpdate?: boolean;
+  hasUpdateInAllSources?: boolean;
   isConsolidated?: boolean;
   vulnerabilities: PackageVulnerabilityInfo[];
 }
@@ -95,6 +102,7 @@ export interface ProjectError {
 }
 
 export interface NugetWorkspacePayload {
+  requestId?: number;
   solutionPath?: string;
   workspaceSettings: WorkspaceSettingsState;
   projects: ProjectInfo[];
@@ -107,6 +115,7 @@ export interface NugetWorkspacePayload {
 }
 
 export interface BrowsePackagesPayload {
+  requestId?: number;
   packages: BrowsePackageInfo[];
   skip: number;
   take: number;
@@ -137,6 +146,10 @@ export interface UpdateSourceRequest extends AddSourceRequest {
 }
 
 export interface RemoveSourceRequest {
+  name: string;
+}
+
+export interface ToggleSourceRequest {
   name: string;
 }
 
@@ -179,8 +192,8 @@ export interface ErrorPayload {
 
 export type WebviewToExtensionMessage =
   | { type: "ready" }
-  | { type: "refresh" }
-  | { type: "browsePackages"; payload: { query: string; includePrerelease: boolean; sourceName: string; skip: number; take: number; append: boolean } }
+  | { type: "refresh"; payload?: { requestId?: number } }
+  | { type: "browsePackages"; payload: { query: string; includePrerelease: boolean; sourceName: string; skip: number; take: number; append: boolean; requestId: number } }
   | { type: "loadPackageDetails"; payload: { packageId: string; version: string; sourceName: string; includePrerelease: boolean } }
   | { type: "selectSource"; payload: { sourceName: string } }
   | { type: "setWorkspaceSolution"; payload: { solutionPath: string } }
@@ -188,6 +201,8 @@ export type WebviewToExtensionMessage =
   | { type: "addSource"; payload: AddSourceRequest }
   | { type: "updateSource"; payload: UpdateSourceRequest }
   | { type: "removeSource"; payload: RemoveSourceRequest }
+  | { type: "enableSource"; payload: ToggleSourceRequest }
+  | { type: "disableSource"; payload: ToggleSourceRequest }
   | { type: "installPackage"; payload: InstallPackageRequest }
   | { type: "bulkInstallPackages"; payload: BulkInstallPackageRequest }
   | { type: "uninstallPackage"; payload: UninstallPackageRequest }

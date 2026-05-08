@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { access } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
@@ -23,7 +24,10 @@ import { WorkspaceScanner } from "./WorkspaceScanner";
 
 const execFileAsync = promisify(execFile);
 const AllSourcesName = "__all__";
-const FeedRequestTimeoutMs = 30000;
+const FeedRequestTimeoutMs = 10000;
+const SourceHealthTimeoutMs = 2500;
+const MaxConcurrentFeedRequests = 4;
+const MaxConcurrentDotnetCommands = 2;
 
 type NugetCatalogEntry = {
   id?: string;
@@ -121,8 +125,8 @@ export class NugetService {
     const sources = await this.ListSources();
     const selectedSources =
       sourceName === AllSourcesName || sourceName.trim().length === 0
-        ? sources.filter((candidate) => candidate.enabled)
-        : sources.filter((candidate) => candidate.name === sourceName);
+        ? sources.filter((candidate) => IsSourceUsableForRequests(candidate))
+        : sources.filter((candidate) => candidate.name === sourceName && IsSourceUsableForRequests(candidate));
 
     if (selectedSources.length === 0) {
       return {
@@ -132,7 +136,9 @@ export class NugetService {
         hasMore: false,
         append,
         status: "error",
-        message: "No enabled NuGet source is available."
+        message: sourceName !== AllSourcesName && sourceName.trim().length > 0
+          ? "Selected NuGet source is unavailable or excluded because it is failing health checks."
+          : "No enabled NuGet source is available."
       };
     }
 
@@ -276,6 +282,32 @@ export class NugetService {
     }
   }
 
+  public async EnableSource(name: string): Promise<void> {
+    const trimmedName = name.trim();
+
+    if (!trimmedName) {
+      throw new Error("NuGet source name is required.");
+    }
+
+    await this.RunDotnet(["nuget", "enable", "source", trimmedName]);
+  }
+
+  public async DisableSource(name: string): Promise<void> {
+    const trimmedName = name.trim();
+
+    if (!trimmedName) {
+      throw new Error("NuGet source name is required.");
+    }
+
+    await this.RunDotnet(["nuget", "disable", "source", trimmedName]);
+
+    const configuredSource = vscode.workspace.getConfiguration("semicDotnetNuget").get<string>("source", "").trim();
+
+    if (configuredSource === trimmedName) {
+      await this.SetConfiguredSource(AllSourcesName);
+    }
+  }
+
   public async InstallPackage(request: InstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
     const selectedProjects = projects.filter((project) => request.projectIds.includes(project.id));
     const sources = await this.ListSources();
@@ -286,6 +318,10 @@ export class NugetService {
 
     if (selectedProjects.length === 0) {
       throw new Error("Select at least one project before installing the package.");
+    }
+
+    if (source && !IsSourceUsableForRequests(source)) {
+      throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before installing packages.");
     }
 
     for (const project of selectedProjects) {
@@ -311,6 +347,10 @@ export class NugetService {
       request.sourceName === AllSourcesName || request.sourceName.trim().length === 0
         ? undefined
         : sources.find((candidate) => candidate.name === request.sourceName);
+    if (source && !IsSourceUsableForRequests(source)) {
+      throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before updating packages.");
+    }
+
     let operationCount = 0;
     const failures: string[] = [];
 
@@ -374,11 +414,46 @@ export class NugetService {
   public async ListSources(): Promise<NugetSource[]> {
     try {
       const { stdout } = await this.RunDotnet(["nuget", "list", "source"]);
+      const sources = ParseNugetSources(stdout);
+      const sourceHealth = await MapWithConcurrencyLimit(sources, MaxConcurrentFeedRequests, async (source) => ({
+        sourceName: source.name,
+        ...(await this.CheckSourceHealth(source))
+      }));
+      const healthBySource = new Map(sourceHealth.map((entry) => [entry.sourceName, entry]));
 
-      return ParseNugetSources(stdout);
+      return sources.map((source) => ({
+        ...source,
+        healthStatus: healthBySource.get(source.name)?.healthStatus ?? "unknown",
+        healthMessage: healthBySource.get(source.name)?.healthMessage ?? "Source status was not checked."
+      }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Could not read NuGet sources through 'dotnet nuget list source'. ${message}`);
+    }
+  }
+
+  private async CheckSourceHealth(source: NugetSource): Promise<Pick<NugetSource, "healthStatus" | "healthMessage">> {
+    try {
+      if (IsHttpSource(source.url)) {
+        await FetchServiceIndex(source.url, SourceHealthTimeoutMs);
+
+        return {
+          healthStatus: "ok",
+          healthMessage: source.enabled ? "Source is available." : "Source is healthy but disabled."
+        };
+      }
+
+      await access(source.url);
+
+      return {
+        healthStatus: "ok",
+        healthMessage: source.enabled ? "Local source path is accessible." : "Local source path is accessible, but source is disabled."
+      };
+    } catch (error) {
+      return {
+        healthStatus: "error",
+        healthMessage: error instanceof Error ? error.message : "Source health check failed."
+      };
     }
   }
 
@@ -386,7 +461,7 @@ export class NugetService {
     packageGroups: PackageGroupInfo[],
     projects: NugetWorkspacePayload["projects"]
   ): Promise<void> {
-    const vulnerabilityResults = await Promise.all(projects.map((project) => this.LoadProjectVulnerabilities(project)));
+    const vulnerabilityResults = await MapWithConcurrencyLimit(projects, MaxConcurrentDotnetCommands, async (project) => await this.LoadProjectVulnerabilities(project));
     const vulnerabilitiesByPackage = new Map<string, PackageVulnerabilityInfo[]>();
 
     vulnerabilityResults.flat().forEach((vulnerability) => {
@@ -413,30 +488,79 @@ export class NugetService {
     selectedSourceName: string,
     includePrerelease: boolean
   ): Promise<void> {
-    const selectedSources = SelectPackageDetailsSources(sources, selectedSourceName);
+    const sourceRegistrations = (await MapWithConcurrencyLimit(SelectPackageAvailabilitySources(sources, AllSourcesName), MaxConcurrentFeedRequests, async (source) => {
+      try {
+        return {
+          source,
+          registrationsBaseUrl: await ResolveRegistrationsBaseUrl(source.url)
+        };
+      } catch {
+        return undefined;
+      }
+    })).filter((entry): entry is { source: NugetSource; registrationsBaseUrl: string } => Boolean(entry));
 
-    await Promise.all(
-      packageGroups.map(async (packageGroup) => {
-        for (const source of selectedSources) {
-          try {
-            const versions = await FetchPackageVersions(source.url, packageGroup.id, includePrerelease);
-            const latestVersion = versions[0];
+    const versionsCache = new Map<string, Promise<string[]>>();
 
-            if (!latestVersion) {
-              continue;
-            }
+    const loadVersions = (entry: { source: NugetSource; registrationsBaseUrl: string }, packageId: string): Promise<string[]> => {
+      const cacheKey = `${entry.source.name}\n${entry.registrationsBaseUrl}\n${packageId.toLowerCase()}\n${includePrerelease ? "prerelease" : "stable"}`;
+      const cached = versionsCache.get(cacheKey);
 
-            packageGroup.latestVersion = latestVersion;
-            packageGroup.hasUpdate = packageGroup.versions.some((version) => CompareVersions(latestVersion, version) > 0);
-            return;
-          } catch {
-            // Try next source.
+      if (cached) {
+        return cached;
+      }
+
+      const pending = FetchPackageVersionsFromRegistrationsBaseUrl(entry.registrationsBaseUrl, packageId, includePrerelease);
+      versionsCache.set(cacheKey, pending);
+      return pending;
+    };
+
+    await MapWithConcurrencyLimit(packageGroups, MaxConcurrentFeedRequests, async (packageGroup) => {
+      const latestVersionEntries = (await Promise.all(sourceRegistrations.map(async (registration) => {
+        try {
+          const versions = await loadVersions(registration, packageGroup.id);
+          const latestVersion = versions[0];
+
+          if (!latestVersion) {
+            return undefined;
           }
+
+          return [registration.source.name, latestVersion] as const;
+        } catch {
+          return undefined;
+        }
+      }))).filter((entry): entry is readonly [string, string] => Boolean(entry));
+
+      const latestVersionBySource = Object.fromEntries(latestVersionEntries);
+      const availableSourceNames = Object.keys(latestVersionBySource);
+      const latestVersionInAllSources = availableSourceNames.reduce<string | undefined>((currentHighest, sourceName) => {
+        const candidateVersion = latestVersionBySource[sourceName];
+
+        if (!candidateVersion) {
+          return currentHighest;
         }
 
-        packageGroup.hasUpdate = false;
-      })
-    );
+        if (!currentHighest || CompareVersions(candidateVersion, currentHighest) > 0) {
+          return candidateVersion;
+        }
+
+        return currentHighest;
+      }, undefined);
+      const latestVersion = selectedSourceName === AllSourcesName || selectedSourceName.trim().length === 0
+        ? latestVersionInAllSources
+        : latestVersionBySource[selectedSourceName];
+
+      packageGroup.availableInSelectedSource = selectedSourceName === AllSourcesName || selectedSourceName.trim().length === 0
+        ? availableSourceNames.length > 0
+        : availableSourceNames.includes(selectedSourceName);
+      packageGroup.availableSourceNames = availableSourceNames;
+      packageGroup.latestVersion = latestVersion;
+      packageGroup.latestVersionBySource = latestVersionBySource;
+      packageGroup.latestVersionInAllSources = latestVersionInAllSources;
+      packageGroup.hasUpdate = latestVersion ? packageGroup.versions.some((version) => CompareVersions(latestVersion, version) > 0) : false;
+      packageGroup.hasUpdateInAllSources = latestVersionInAllSources
+        ? packageGroup.versions.some((version) => CompareVersions(latestVersionInAllSources, version) > 0)
+        : false;
+    });
   }
 
   private async LoadProjectVulnerabilities(project: NugetWorkspacePayload["projects"][number]): Promise<Array<PackageVulnerabilityInfo & { packageId: string }>> {
@@ -472,6 +596,7 @@ export class NugetService {
       env: {
         ...process.env,
         DOTNET_CLI_HOME: this.dotnetCliHome,
+        DOTNET_CLI_UI_LANGUAGE: "en",
         DOTNET_CLI_TELEMETRY_OPTOUT: "1",
         DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
       },
@@ -580,7 +705,7 @@ function ParseNugetSources(output: string): NugetSource[] {
     sources.push({
       name: sourceLine[1].trim(),
       url,
-      enabled: !/^(disabled|wyłączone|wylaczone)$/i.test(sourceLine[2].trim())
+      enabled: !/^(disabled|wyłączone|wylaczone|wyłączono|wylaczono)$/i.test(sourceLine[2].trim())
     });
   }
 
@@ -639,7 +764,7 @@ function ExtractVulnerabilities(value: unknown): Array<{
 }
 
 function SelectPackageDetailsSources(sources: NugetSource[], sourceName: string): NugetSource[] {
-  const enabledHttpSources = sources.filter((source) => source.enabled && IsHttpSource(source.url));
+  const enabledHttpSources = sources.filter((source) => IsSourceUsableForRequests(source) && IsHttpSource(source.url));
   const ordered =
     sourceName === AllSourcesName || sourceName.trim().length === 0
       ? enabledHttpSources
@@ -654,6 +779,16 @@ function SelectPackageDetailsSources(sources: NugetSource[], sourceName: string)
   });
 
   return Array.from(unique.values());
+}
+
+function SelectPackageAvailabilitySources(sources: NugetSource[], sourceName: string): NugetSource[] {
+  const enabledHttpSources = sources.filter((source) => IsSourceUsableForRequests(source) && IsHttpSource(source.url));
+
+  if (sourceName === AllSourcesName || sourceName.trim().length === 0) {
+    return enabledHttpSources;
+  }
+
+  return enabledHttpSources.filter((source) => source.name === sourceName);
 }
 
 function IsHttpSource(sourceUrl: string): boolean {
@@ -710,16 +845,12 @@ async function SearchSource(sourceUrl: string, query: string, includePrerelease:
 
 async function FetchPackageDetails(sourceUrl: string, packageId: string, version: string, includePrerelease: boolean): Promise<PackageDetailsPayload["details"]> {
   const serviceIndex = await FetchServiceIndex(sourceUrl);
-  const registrationsBaseUrl = FindServiceResource(serviceIndex, "registrationsbaseurl")?.["@id"];
-
-  if (!registrationsBaseUrl) {
-    throw new Error("Selected NuGet source does not expose a registration endpoint.");
-  }
+  const registrationsBaseUrl = GetRegistrationsBaseUrl(serviceIndex);
 
   const registration = await FetchRegistrationLeaf(registrationsBaseUrl, packageId, version);
   const catalogEntry = await ResolveCatalogEntry(registration.catalogEntry);
   const resolvedVersion = catalogEntry.version ?? version;
-  const availableVersions = await FetchPackageVersions(sourceUrl, packageId, includePrerelease);
+  const availableVersions = await FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl, packageId, includePrerelease);
   const readmeUrl = catalogEntry.readmeUrl || BuildReadmeUrl(FindServiceResource(serviceIndex, "readmeuritemplate")?.["@id"], packageId, resolvedVersion);
   const readme = readmeUrl ? await TryFetchText(readmeUrl) : "";
 
@@ -741,13 +872,10 @@ async function FetchPackageDetails(sourceUrl: string, packageId: string, version
 }
 
 async function FetchPackageVersions(sourceUrl: string, packageId: string, includePrerelease: boolean): Promise<string[]> {
-  const serviceIndex = await FetchServiceIndex(sourceUrl);
-  const registrationsBaseUrl = FindServiceResource(serviceIndex, "registrationsbaseurl")?.["@id"];
+  return await FetchPackageVersionsFromRegistrationsBaseUrl(await ResolveRegistrationsBaseUrl(sourceUrl), packageId, includePrerelease);
+}
 
-  if (!registrationsBaseUrl) {
-    throw new Error("Selected NuGet source does not expose a registration endpoint.");
-  }
-
+async function FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl: string, packageId: string, includePrerelease: boolean): Promise<string[]> {
   const normalizedBaseUrl = registrationsBaseUrl.endsWith("/") ? registrationsBaseUrl : `${registrationsBaseUrl}/`;
   const encodedPackageId = encodeURIComponent(packageId.toLowerCase());
   const index = await FetchJson<{
@@ -771,6 +899,20 @@ async function FetchPackageVersions(sourceUrl: string, packageId: string, includ
   }
 
   return Array.from(versions).sort((left, right) => CompareVersions(right, left));
+}
+
+async function ResolveRegistrationsBaseUrl(sourceUrl: string): Promise<string> {
+  return GetRegistrationsBaseUrl(await FetchServiceIndex(sourceUrl));
+}
+
+function GetRegistrationsBaseUrl(serviceIndex: ServiceIndex): string {
+  const registrationsBaseUrl = FindServiceResource(serviceIndex, "registrationsbaseurl")?.["@id"];
+
+  if (!registrationsBaseUrl) {
+    throw new Error("Selected NuGet source does not expose a registration endpoint.");
+  }
+
+  return registrationsBaseUrl;
 }
 
 function IsPrereleaseVersion(version: string): boolean {
@@ -917,14 +1059,14 @@ function ScorePackageDetails(details: PackageDetailsPayload["details"]): number 
   );
 }
 
-async function FetchServiceIndex(sourceUrl: string): Promise<ServiceIndex> {
+async function FetchServiceIndex(sourceUrl: string, timeoutMs = FeedRequestTimeoutMs): Promise<ServiceIndex> {
   const serviceIndexUrl = sourceUrl.trim();
 
   if (!IsHttpSource(serviceIndexUrl)) {
     throw new Error("Package details are available for HTTP NuGet v3 sources.");
   }
 
-  return await FetchJson<ServiceIndex>(serviceIndexUrl);
+  return await FetchJson<ServiceIndex>(serviceIndexUrl, timeoutMs);
 }
 
 function BuildPackageVersions(latestVersion: string | undefined, versions: Array<{ version?: string }> | undefined): string[] {
@@ -943,8 +1085,8 @@ function BuildPackageVersions(latestVersion: string | undefined, versions: Array
   return Array.from(allVersions).sort((left, right) => CompareVersions(right, left));
 }
 
-async function FetchJson<T>(url: string): Promise<T> {
-  const response = await FetchWithTimeout(url);
+async function FetchJson<T>(url: string, timeoutMs = FeedRequestTimeoutMs): Promise<T> {
+  const response = await FetchWithTimeout(url, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`NuGet source returned HTTP ${response.status}.`);
@@ -954,7 +1096,7 @@ async function FetchJson<T>(url: string): Promise<T> {
 }
 
 async function FetchText(url: string): Promise<string> {
-  const response = await FetchWithTimeout(url);
+  const response = await FetchWithTimeout(url, FeedRequestTimeoutMs);
 
   if (!response.ok) {
     throw new Error(`NuGet source returned HTTP ${response.status}.`);
@@ -963,15 +1105,15 @@ async function FetchText(url: string): Promise<string> {
   return await response.text();
 }
 
-async function FetchWithTimeout(url: string): Promise<Response> {
+async function FetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FeedRequestTimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, { signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`NuGet source did not respond within ${FeedRequestTimeoutMs / 1000} seconds.`);
+      throw new Error(`NuGet source did not respond within ${timeoutMs / 1000} seconds.`);
     }
 
     throw error;
@@ -980,12 +1122,45 @@ async function FetchWithTimeout(url: string): Promise<Response> {
   }
 }
 
+function IsSourceUsableForRequests(source: NugetSource): boolean {
+  return source.enabled && source.healthStatus !== "error";
+}
+
 async function TryFetchText(url: string): Promise<string> {
   try {
     return await FetchText(url);
   } catch {
     return "";
   }
+}
+
+async function MapWithConcurrencyLimit<TInput, TResult>(
+  items: readonly TInput[],
+  concurrencyLimit: number,
+  mapItem: (item: TInput, index: number) => Promise<TResult>
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrencyLimit, items.length) }, async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      results[currentIndex] = await mapItem(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 function CompareVersions(left: string, right: string): number {

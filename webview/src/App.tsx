@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PreviewTab, SelectedPackageContext, SourceDraft } from "./AppTypes";
 import {
     getBulkPackageItems,
+    getLatestVersionForSource,
     getSelectedPackageContext,
     getSelectedSourceLabel,
     getVisibleInstalledGroups,
@@ -56,6 +57,7 @@ export function App() {
     const [status, setStatus] = useState<OperationStatus>("loading");
     const [statusMessage, setStatusMessage] = useState("Loading workspace projects and NuGet sources...");
     const [actionBusy, setActionBusy] = useState<BusyAction>("refresh");
+    const [workspaceRefreshPending, setWorkspaceRefreshPending] = useState(true);
     const [solutionPath, setSolutionPath] = useState("");
     const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettingsState>({ useAllProjects: false, solutionPath: "", availableSolutions: [] });
     const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -71,7 +73,12 @@ export function App() {
     const [errors, setErrors] = useState<ProjectError[]>([]);
     const [errorDetails, setErrorDetails] = useState("");
     const browseTimerRef = useRef<number | undefined>(undefined);
+    const sourceChangeTimerRef = useRef<number | undefined>(undefined);
+    const refreshFrameRef = useRef<number | undefined>(undefined);
     const browseAppendInFlightRef = useRef(false);
+    const browseRequestIdRef = useRef(0);
+    const refreshRequestIdRef = useRef(0);
+    const pendingRefreshRequestIdRef = useRef<number | undefined>(undefined);
 
     const postClientState = useCallback(
         (nextActiveTab = activeTab, nextSearchTerm = searchTerm, nextSelectedSourceName = selectedSourceName, nextIncludePrerelease = includePrerelease) => {
@@ -91,15 +98,15 @@ export function App() {
     );
 
     const visibleGroups = useMemo(
-        () => getVisibleInstalledGroups(installedPackages, activeTab, searchTerm),
-        [activeTab, installedPackages, searchTerm]
+        () => getVisibleInstalledGroups(installedPackages, activeTab, searchTerm, selectedSourceName),
+        [activeTab, installedPackages, searchTerm, selectedSourceName]
     );
 
     const scheduleBrowse = useCallback(
-        (options: { append?: boolean; immediate?: boolean; query?: string; sourceName?: string; prerelease?: boolean } = {}) => {
+        (options: { append?: boolean; immediate?: boolean; query?: string; sourceName?: string; prerelease?: boolean; force?: boolean } = {}) => {
             window.clearTimeout(browseTimerRef.current);
 
-            if (activeTab !== "browse") {
+            if (activeTab !== "browse" && !options.force) {
                 return;
             }
 
@@ -124,7 +131,10 @@ export function App() {
             setStatusMessage("Loading packages...");
 
             browseTimerRef.current = window.setTimeout(
-                () =>
+                () => {
+                    const requestId = browseRequestIdRef.current + 1;
+                    browseRequestIdRef.current = requestId;
+
                     vscode.postMessage({
                         type: "browsePackages",
                         payload: {
@@ -133,9 +143,11 @@ export function App() {
                             sourceName: options.sourceName ?? selectedSourceName,
                             skip,
                             take: BROWSE_PAGE_SIZE,
-                            append
+                            append,
+                            requestId
                         }
-                    }),
+                    });
+                },
                 options.immediate ? 0 : 350
             );
         },
@@ -143,8 +155,8 @@ export function App() {
     );
 
     const selectedPackage = useMemo<SelectedPackageContext | undefined>(
-        () => getSelectedPackageContext(activeTab, selectedPackageId, selectedPackageVersion, browsePackages, installedPackages),
-        [activeTab, browsePackages, installedPackages, selectedPackageId, selectedPackageVersion]
+        () => getSelectedPackageContext(activeTab, selectedPackageId, selectedPackageVersion, browsePackages, installedPackages, selectedSourceName),
+        [activeTab, browsePackages, installedPackages, selectedPackageId, selectedPackageVersion, selectedSourceName]
     );
 
     const requestPackageDetails = useCallback(
@@ -180,21 +192,35 @@ export function App() {
             }
 
             if (message.type === "busyState") {
+                const nextBusyAction = message.payload.status === "loading" ? inferBusyAction(message.payload.message) : "";
+
                 setStatus(message.payload.status);
                 setStatusMessage(message.payload.message);
-                setActionBusy(message.payload.status === "loading" ? inferBusyAction(message.payload.message) : "");
+                setActionBusy(nextBusyAction);
+                if (nextBusyAction === "refresh") {
+                    setWorkspaceRefreshPending(true);
+                }
                 setSourceActionName((current) => (message.payload.status === "loading" ? current : ""));
                 return;
             }
 
             if (message.type === "workspaceLoaded") {
+                if (pendingRefreshRequestIdRef.current !== undefined && message.payload.requestId !== pendingRefreshRequestIdRef.current) {
+                    return;
+                }
+
+                pendingRefreshRequestIdRef.current = undefined;
+                setWorkspaceRefreshPending(false);
+                const nextSelectedSourceName = selectedSourceName === ALL_SOURCES || message.payload.sources.some((source) => source.name === selectedSourceName)
+                    ? selectedSourceName
+                    : message.payload.options.selectedSourceName;
                 setSolutionPath(message.payload.solutionPath || "");
                 setWorkspaceSettings(message.payload.workspaceSettings);
                 setProjects(message.payload.projects);
                 setSources(message.payload.sources);
                 setInstalledPackages(message.payload.installedPackages);
                 setErrors(message.payload.errors);
-                setSelectedSourceName(message.payload.options.selectedSourceName);
+                setSelectedSourceName(nextSelectedSourceName);
                 setIncludePrerelease(message.payload.options.includePrerelease);
                 setStatus(message.payload.status);
                 setStatusMessage(message.payload.message);
@@ -202,11 +228,19 @@ export function App() {
                 setSourceActionName("");
                 setBulkSelectionKey("");
                 setSourceFormOpen(false);
-                scheduleBrowse({ immediate: true, query: searchTerm, sourceName: message.payload.options.selectedSourceName, prerelease: message.payload.options.includePrerelease });
+
+                if (activeTab === "browse") {
+                    scheduleBrowse({ immediate: true, query: searchTerm, sourceName: nextSelectedSourceName, prerelease: message.payload.options.includePrerelease });
+                }
+
                 return;
             }
 
             if (message.type === "browsePackagesLoaded") {
+                if (typeof message.payload.requestId === "number" && message.payload.requestId !== browseRequestIdRef.current) {
+                    return;
+                }
+
                 browseAppendInFlightRef.current = false;
                 setBrowsePackages((current) => (message.payload.append ? mergePackages(current, message.payload.packages) : message.payload.packages));
                 setBrowseSkip(message.payload.skip + message.payload.packages.length);
@@ -227,6 +261,8 @@ export function App() {
             }
 
             if (message.type === "error") {
+                pendingRefreshRequestIdRef.current = undefined;
+                setWorkspaceRefreshPending(false);
                 browseAppendInFlightRef.current = false;
                 setStatus("error");
                 setStatusMessage(message.payload.message);
@@ -246,6 +282,8 @@ export function App() {
 
     useEffect(() => () => {
         window.clearTimeout(browseTimerRef.current);
+        window.clearTimeout(sourceChangeTimerRef.current);
+        window.cancelAnimationFrame(refreshFrameRef.current ?? 0);
     }, []);
 
     useEffect(() => {
@@ -286,9 +324,17 @@ export function App() {
         setSettingsOpen(false);
         setInfoOpen(false);
         postClientState(tab);
+
+        if (tab === "browse") {
+            scheduleBrowse({ immediate: true, force: true });
+        }
     };
 
     const refresh = () => {
+        const requestId = refreshRequestIdRef.current + 1;
+        refreshRequestIdRef.current = requestId;
+        pendingRefreshRequestIdRef.current = requestId;
+        setWorkspaceRefreshPending(true);
         setStatus("loading");
         setStatusMessage("Loading workspace projects and NuGet sources...");
         setActionBusy("refresh");
@@ -297,7 +343,10 @@ export function App() {
         setBrowseSkip(0);
         setBrowseHasMore(false);
         setBrowseLoading(true);
-        vscode.postMessage({ type: "refresh" });
+        window.cancelAnimationFrame(refreshFrameRef.current ?? 0);
+        refreshFrameRef.current = window.requestAnimationFrame(() => {
+            vscode.postMessage({ type: "refresh", payload: { requestId } });
+        });
     };
 
     const changeSearch = (value: string) => {
@@ -315,12 +364,32 @@ export function App() {
     };
 
     const changeSource = (value: string) => {
+        window.clearTimeout(sourceChangeTimerRef.current);
         setSelectedSourceName(value);
         postClientState(activeTab, searchTerm, value);
-        scheduleBrowse({ sourceName: value });
-        if (value !== ALL_SOURCES) {
-            vscode.postMessage({ type: "selectSource", payload: { sourceName: value } });
+        setSelectedPackageId("");
+        setSelectedPackageVersion("");
+        setSelectedProjectIds(new Set());
+        setPreviewTab("details");
+        setErrorDetails("");
+
+        if (activeTab === "browse") {
+            setBrowsePackages([]);
+            setBrowseSkip(0);
+            setBrowseHasMore(false);
+            setBrowseLoading(true);
+            setStatus("loading");
+            setStatusMessage("Loading packages...");
+            scheduleBrowse({ sourceName: value, immediate: true });
+        } else {
+            setStatus("success");
+            setStatusMessage(`Showing packages from ${value === ALL_SOURCES ? "all sources" : value}.`);
+            setActionBusy("");
         }
+
+        sourceChangeTimerRef.current = window.setTimeout(() => {
+            vscode.postMessage({ type: "selectSource", payload: { sourceName: value } });
+        }, 150);
     };
 
     const selectBrowsePackage = (packageInfo: BrowsePackageInfo) => {
@@ -333,7 +402,8 @@ export function App() {
     };
 
     const selectInstalledPackage = (packageGroup: PackageGroupInfo) => {
-        const version = activeTab === "updates" ? packageGroup.latestVersion || packageGroup.versions.at(-1) || packageGroup.versions[0] || "" : packageGroup.versions.at(-1) || packageGroup.versions[0] || "";
+        const latestVersion = getLatestVersionForSource(packageGroup, selectedSourceName);
+        const version = activeTab === "updates" ? latestVersion || packageGroup.versions.at(-1) || packageGroup.versions[0] || "" : packageGroup.versions.at(-1) || packageGroup.versions[0] || "";
         setSelectedPackageId(packageGroup.id);
         setSelectedPackageVersion(version);
         setSelectedProjectIds(new Set(packageGroup.projects.map((project) => project.projectId)));
@@ -342,10 +412,11 @@ export function App() {
         setPreviewTab("details");
     };
 
-    const bulkItems = getBulkPackageItems(activeTab, visibleGroups, bulkSelectedPackageIds);
+    const bulkItems = getBulkPackageItems(activeTab, visibleGroups, bulkSelectedPackageIds, selectedSourceName);
     const details = selectedPackage ? packageDetails[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)] : undefined;
     const detailsLoading = selectedPackage ? Boolean(packageDetailsLoading[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)]) : false;
-    const isWorkspaceReloading = actionBusy === "refresh";
+    const isWorkspaceReloading = workspaceRefreshPending;
+    const toolbarBusyAction: BusyAction = isWorkspaceReloading ? "refresh" : actionBusy;
 
     return (
         <div className="appShell">
@@ -353,7 +424,7 @@ export function App() {
                 <section className="packageColumn">
                     <Toolbar
                         activeTab={activeTab}
-                        actionBusy={actionBusy}
+                        actionBusy={toolbarBusyAction}
                         bulkSelectedPackageIds={bulkSelectedPackageIds}
                         includePrerelease={includePrerelease}
                         installedPackages={installedPackages}
@@ -475,6 +546,22 @@ export function App() {
                                 setSourceEditName(source.name);
                                 setSourceAuthMode("none");
                                 setSourceDraft({ name: source.name, url: source.url, username: "", password: "" });
+                            }}
+                            onEnableSource={(sourceName) => {
+                                setSources((current) => current.map((source) => source.name === sourceName ? { ...source, enabled: true, healthStatus: "unknown", healthMessage: "Checking source health..." } : source));
+                                setActionBusy("source");
+                                setSourceActionName(sourceName);
+                                vscode.postMessage({ type: "enableSource", payload: { name: sourceName } });
+                            }}
+                            onDisableSource={(sourceName) => {
+                                setSources((current) => current.map((source) => source.name === sourceName ? { ...source, enabled: false } : source));
+                                if (selectedSourceName === sourceName) {
+                                    setSelectedSourceName(ALL_SOURCES);
+                                    postClientState(activeTab, searchTerm, ALL_SOURCES, includePrerelease);
+                                }
+                                setActionBusy("source");
+                                setSourceActionName(sourceName);
+                                vscode.postMessage({ type: "disableSource", payload: { name: sourceName } });
                             }}
                             onRemoveSource={(sourceName) => {
                                 setActionBusy("source");

@@ -16,6 +16,9 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
   private readonly nugetService: NugetService;
   private readonly disposables: vscode.Disposable[] = [];
   private webviewView: vscode.WebviewView | undefined;
+  private refreshSequence = 0;
+  private pendingSourceSelection: string | undefined;
+  private sourceSelectionInFlight = false;
   private clientState: PanelClientState = {
     activeTab: "browse",
     searchTerm: "",
@@ -58,10 +61,12 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
     );
   }
 
-  public async Refresh(options?: { preserveBusyState?: boolean }): Promise<void> {
+  public async Refresh(options?: { preserveBusyState?: boolean; requestId?: number }): Promise<void> {
     if (!this.webviewView) {
       return;
     }
+
+    const refreshSequence = ++this.refreshSequence;
 
     if (!options?.preserveBusyState) {
       await this.PostMessage({
@@ -75,10 +80,19 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
 
     try {
       const payload = await this.nugetService.LoadWorkspace(this.clientState.options);
+
+      if (refreshSequence !== this.refreshSequence) {
+        return;
+      }
+
       this.clientState.options = payload.options;
       this.projects = payload.projects;
-      await this.PostMessage({ type: "workspaceLoaded", payload });
+      await this.PostMessage({ type: "workspaceLoaded", payload: { ...payload, requestId: options?.requestId } });
     } catch (error) {
+      if (refreshSequence !== this.refreshSequence) {
+        return;
+      }
+
       await this.PostMessage({
         type: "error",
         payload: {
@@ -103,15 +117,13 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         await this.Refresh();
         break;
       case "refresh":
-        await this.Refresh();
+        await this.Refresh({ requestId: message.payload?.requestId });
         break;
       case "syncState":
         this.clientState = message.payload;
         break;
       case "selectSource":
-        this.clientState.options.selectedSourceName = message.payload.sourceName;
-        await this.nugetService.SetConfiguredSource(message.payload.sourceName);
-        await this.Refresh();
+        this.QueueSourceSelection(message.payload.sourceName);
         break;
       case "setWorkspaceSolution":
         await this.nugetService.SetWorkspaceSolution(message.payload.solutionPath);
@@ -151,6 +163,27 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
           await this.Refresh();
         } catch (error) {
           await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Could not remove NuGet source." } });
+        }
+        break;
+      case "enableSource":
+        try {
+          await this.PostMessage({ type: "busyState", payload: { status: "loading", message: "Enabling NuGet source..." } });
+          await this.nugetService.EnableSource(message.payload.name);
+          await this.Refresh();
+        } catch (error) {
+          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Could not enable NuGet source." } });
+        }
+        break;
+      case "disableSource":
+        try {
+          await this.PostMessage({ type: "busyState", payload: { status: "loading", message: "Disabling NuGet source..." } });
+          await this.nugetService.DisableSource(message.payload.name);
+          if (this.clientState.options.selectedSourceName === message.payload.name) {
+            this.clientState.options.selectedSourceName = "__all__";
+          }
+          await this.Refresh();
+        } catch (error) {
+          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Could not disable NuGet source." } });
         }
         break;
       case "installPackage":
@@ -197,7 +230,7 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
             message.payload.take,
             message.payload.append
           );
-          await this.PostMessage({ type: "browsePackagesLoaded", payload: result });
+          await this.PostMessage({ type: "browsePackagesLoaded", payload: { ...result, requestId: message.payload.requestId } });
         } catch (error) {
           await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "NuGet search failed." } });
         }
@@ -220,6 +253,38 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
       case "openSettings":
         await vscode.commands.executeCommand("workbench.action.openSettings", "semicDotnetNuget.source");
         break;
+    }
+  }
+
+  private QueueSourceSelection(sourceName: string): void {
+    this.clientState.options.selectedSourceName = sourceName;
+    this.pendingSourceSelection = sourceName;
+
+    if (!this.sourceSelectionInFlight) {
+      void this.ProcessSourceSelectionQueue();
+    }
+  }
+
+  private async ProcessSourceSelectionQueue(): Promise<void> {
+    if (this.sourceSelectionInFlight) {
+      return;
+    }
+
+    this.sourceSelectionInFlight = true;
+
+    try {
+      while (this.pendingSourceSelection !== undefined) {
+        const requestedSourceName = this.pendingSourceSelection;
+        this.pendingSourceSelection = undefined;
+
+        await this.nugetService.SetConfiguredSource(requestedSourceName);
+      }
+    } finally {
+      this.sourceSelectionInFlight = false;
+
+      if (this.pendingSourceSelection !== undefined) {
+        void this.ProcessSourceSelectionQueue();
+      }
     }
   }
 

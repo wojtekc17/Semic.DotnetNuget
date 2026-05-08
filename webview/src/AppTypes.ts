@@ -41,6 +41,8 @@ export interface SourceSettingsPaneProps {
     onChangeSolution: (solutionPath: string) => void;
     onChangeUseAllProjects: (useAllProjects: boolean) => void;
     onEditSource: (source: NugetSource) => void;
+    onEnableSource: (sourceName: string) => void;
+    onDisableSource: (sourceName: string) => void;
     onRemoveSource: (sourceName: string) => void;
     onSelectSource: (sourceName: string) => void;
     onShowSourceForm: () => void;

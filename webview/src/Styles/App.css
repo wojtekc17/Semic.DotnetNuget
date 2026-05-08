@@ -128,6 +128,10 @@ select {
   font-size: 16px;
 }
 
+.gearButton {
+  position: relative;
+}
+
 .infoButton::before {
   content: "i";
   font-size: 16px;
@@ -165,6 +169,39 @@ select {
   background: color-mix(in srgb, #f5c542 82%, transparent);
   color: #1f1f1f;
   font-weight: 700;
+}
+
+.toolbarAlertBadge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--error) 88%, transparent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.toolbarWarningBadge {
+  position: absolute;
+  top: -2px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #d69e2e 82%, transparent);
+  color: #1f1f1f;
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .searchBox {
@@ -252,6 +289,100 @@ select {
 
 .toolbarSpacer {
   flex: 1;
+}
+
+.sourceNameRow,
+.sourceStatusRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sourceStatusRow {
+  flex-wrap: wrap;
+}
+
+.sourceProblemMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--error) 88%, transparent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sourceWarningMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #d69e2e 82%, transparent);
+  color: #1f1f1f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sourceExcludedMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #8a5a00;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sourceStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sourceStatusBadge.isEnabled {
+  background: color-mix(in srgb, #38a169 28%, transparent);
+  color: color-mix(in srgb, #38a169 88%, var(--text));
+}
+
+.sourceStatusBadge.isDisabled {
+  background: color-mix(in srgb, var(--border-strong) 55%, transparent);
+  color: var(--text-muted);
+}
+
+.sourceStatusBadge.isHealthy {
+  background: color-mix(in srgb, #2f855a 22%, transparent);
+  color: color-mix(in srgb, #2f855a 88%, var(--text));
+}
+
+.sourceStatusBadge.isProblem {
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  color: var(--error);
+}
+
+.sourceStatusBadge.isUnknown {
+  background: color-mix(in srgb, #718096 24%, transparent);
+  color: color-mix(in srgb, #718096 88%, var(--text));
+}
+
+.sourceStatusBadge.isExcluded {
+  background: color-mix(in srgb, #d69e2e 22%, transparent);
+  color: color-mix(in srgb, #8a5a00 88%, var(--text));
+}
+
+.sourceHealthText {
+  color: var(--text-muted);
+  line-height: 1.35;
 }
 
 .contentScroller {

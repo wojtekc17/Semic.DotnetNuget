@@ -4,6 +4,8 @@ import type { SourceAuthMode } from "../Types";
 import { Spinner } from "./Common";
 
 export function SourceSettingsPane(props: SourceSettingsPaneProps) {
+    const selectableSources = props.sources.filter((source) => source.enabled && source.healthStatus !== "error");
+
     return (
         <>
             <section className="detailsSection">
@@ -17,14 +19,34 @@ export function SourceSettingsPane(props: SourceSettingsPaneProps) {
                 <h2>Sources</h2>
                 <select className="sourceSelect" value={props.selectedSourceName || ALL_SOURCES} onChange={(event) => props.onSelectSource(event.target.value)}>
                     <option value={ALL_SOURCES}>All</option>
-                    {props.sources.map((source) => <option key={source.name} value={source.name}>{source.name}</option>)}
+                    {selectableSources.map((source) => <option key={source.name} value={source.name}>{source.name}</option>)}
                 </select>
                 <div className="sourceList">
                     {props.sources.map((source) => (
                         <div key={source.name} className={`sourceRow ${source.name === props.selectedSourceName ? "isActive" : ""}`} title={source.url}>
-                            <button className="sourceSelectButton" type="button" onClick={() => props.onSelectSource(source.name)}><span>{source.name}</span><code>{source.url}</code></button>
+                            {(() => {
+                                const hasProblem = source.healthStatus === "error";
+                                const isExcluded = !source.enabled && source.healthStatus !== "error";
+
+                                return (
+                            <button className="sourceSelectButton" type="button" onClick={() => props.onSelectSource(source.name)}>
+                                <span className="sourceNameRow">
+                                    <span>{source.name}</span>
+                                    {hasProblem ? <span className={source.enabled ? "sourceProblemMark" : "sourceWarningMark"} aria-label="Source problem">!</span> : null}
+                                    {isExcluded ? <span className="sourceExcludedMark" aria-label="Source excluded">▲</span> : null}
+                                </span>
+                                <code>{source.url}</code>
+                                <span className="sourceStatusRow">
+                                    <span className={`sourceStatusBadge ${source.enabled ? "isEnabled" : "isDisabled"}`}>{source.enabled ? "Enabled" : "Disabled"}</span>
+                                    <span className={`sourceStatusBadge ${isExcluded ? "isExcluded" : source.healthStatus === "ok" ? "isHealthy" : source.healthStatus === "error" ? "isProblem" : "isUnknown"}`}>{isExcluded ? "Excluded" : source.healthStatus === "ok" ? "OK" : source.healthStatus === "error" ? "Problem" : "Unchecked"}</span>
+                                </span>
+                                <small className="sourceHealthText">{source.healthMessage || (source.enabled ? "Source status unknown." : "Source is disabled.")}</small>
+                            </button>
+                                );
+                            })()}
                             <div className="sourceActions">
                                 <button className="iconButton sourceActionButton" type="button" onClick={() => props.onEditSource(source)}>Edit</button>
+                                {source.enabled ? <button className="iconButton sourceActionButton" type="button" onClick={() => props.onDisableSource(source.name)}>{props.actionBusy === "source" && props.sourceActionName === source.name ? <Spinner /> : null} Disable</button> : <button className="iconButton sourceActionButton" type="button" onClick={() => props.onEnableSource(source.name)}>{props.actionBusy === "source" && props.sourceActionName === source.name ? <Spinner /> : null} Enable</button>}
                                 <button className="iconButton sourceActionButton removeSourceButton" type="button" onClick={() => props.onRemoveSource(source.name)}>{props.actionBusy === "source" && props.sourceActionName === source.name ? <Spinner /> : null} Remove</button>
                             </div>
                         </div>
