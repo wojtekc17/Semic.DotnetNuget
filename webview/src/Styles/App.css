@@ -171,6 +171,22 @@ select {
   font-weight: 700;
 }
 
+.tabLoadingSpinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+.tabLoadingSpinner .spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 2px;
+  vertical-align: middle;
+}
+
 .toolbarAlertBadge {
   position: absolute;
   top: -2px;

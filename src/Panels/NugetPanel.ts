@@ -87,7 +87,15 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
 
       this.clientState.options = payload.options;
       this.projects = payload.projects;
-      await this.PostMessage({ type: "workspaceLoaded", payload: { ...payload, requestId: options?.requestId } });
+      await this.PostMessage({
+        type: "workspaceLoaded",
+        payload: {
+          ...payload,
+          requestId: options?.requestId,
+          backgroundDataPending: payload.projects.length > 0
+        }
+      });
+      void this.RefreshWorkspaceBackgroundData(refreshSequence, payload, options?.requestId);
     } catch (error) {
       if (refreshSequence !== this.refreshSequence) {
         return;
@@ -97,6 +105,52 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         type: "error",
         payload: {
           message: error instanceof Error ? error.message : "Workspace refresh failed."
+        }
+      });
+    }
+  }
+
+  private async RefreshWorkspaceBackgroundData(
+    refreshSequence: number,
+    currentPayload: Awaited<ReturnType<NugetService["LoadWorkspace"]>>,
+    requestId?: number
+  ): Promise<void> {
+    if (currentPayload.projects.length === 0) {
+      return;
+    }
+
+    try {
+      const backgroundPayload = await this.nugetService.LoadWorkspaceBackgroundData(this.clientState.options, currentPayload.projects);
+
+      if (refreshSequence !== this.refreshSequence) {
+        return;
+      }
+
+      await this.PostMessage({
+        type: "workspaceLoaded",
+        payload: {
+          ...currentPayload,
+          installedPackages: backgroundPayload.installedPackages,
+          sources: backgroundPayload.sources,
+          status: backgroundPayload.status,
+          message: backgroundPayload.message,
+          requestId,
+          backgroundDataPending: false
+        }
+      });
+    } catch {
+      if (refreshSequence !== this.refreshSequence) {
+        return;
+      }
+
+      await this.PostMessage({
+        type: "workspaceLoaded",
+        payload: {
+          ...currentPayload,
+          requestId,
+          backgroundDataPending: false,
+          status: "error",
+          message: "Background loading of updates and vulnerabilities failed."
         }
       });
     }
@@ -118,6 +172,15 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         break;
       case "refresh":
         await this.Refresh({ requestId: message.payload?.requestId });
+        break;
+      case "verifyWorkspace":
+        try {
+          await this.PostMessage({ type: "busyState", payload: { status: "loading", message: "Verifying workspace package references..." } });
+          const verifyMessage = await this.nugetService.VerifyWorkspaceState();
+          await this.PostMessage({ type: "busyState", payload: { status: "success", message: verifyMessage } });
+        } catch (error) {
+          await this.PostMessage({ type: "error", payload: { message: error instanceof Error ? error.message : "Workspace verification failed." } });
+        }
         break;
       case "syncState":
         this.clientState = message.payload;

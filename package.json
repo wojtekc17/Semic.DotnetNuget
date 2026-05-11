@@ -44,6 +44,11 @@
           "type": "boolean",
           "default": false,
           "description": "Internal flag that prevents repeated automatic discovery after the workspace loading mode has been chosen."
+        },
+        "semicDotnetNuget.workspace.networkChecksOnLoad": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, checks NuGet source health over network during workspace load. Keep false for faster startup."
         }
       }
     },

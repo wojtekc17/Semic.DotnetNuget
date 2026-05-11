@@ -103,6 +103,7 @@ export interface ProjectError {
 
 export interface NugetWorkspacePayload {
   requestId?: number;
+  backgroundDataPending?: boolean;
   solutionPath?: string;
   workspaceSettings: WorkspaceSettingsState;
   projects: ProjectInfo[];
@@ -193,6 +194,7 @@ export interface ErrorPayload {
 export type WebviewToExtensionMessage =
   | { type: "ready" }
   | { type: "refresh"; payload?: { requestId?: number } }
+  | { type: "verifyWorkspace" }
   | { type: "browsePackages"; payload: { query: string; includePrerelease: boolean; sourceName: string; skip: number; take: number; append: boolean; requestId: number } }
   | { type: "loadPackageDetails"; payload: { packageId: string; version: string; sourceName: string; includePrerelease: boolean } }
   | { type: "selectSource"; payload: { sourceName: string } }

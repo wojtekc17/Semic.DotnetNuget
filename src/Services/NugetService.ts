@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
+import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import {
@@ -28,6 +29,11 @@ const FeedRequestTimeoutMs = 10000;
 const SourceHealthTimeoutMs = 2500;
 const MaxConcurrentFeedRequests = 4;
 const MaxConcurrentDotnetCommands = 2;
+const WorkspaceConfigurationSection = "semicDotnetNuget.workspace";
+
+interface WorkspaceLoadPerformanceSettings {
+  networkChecksOnLoad: boolean;
+}
 
 type NugetCatalogEntry = {
   id?: string;
@@ -81,15 +87,15 @@ export class NugetService {
   }
 
   public async LoadWorkspace(options: OptionsState): Promise<NugetWorkspacePayload> {
+    const performanceSettings = this.GetWorkspaceLoadPerformanceSettings();
     const [scanResult, sources, availableSolutions] = await Promise.all([
       this.scanner.Scan(),
-      this.ListSources(),
+      this.ListSources(performanceSettings.networkChecksOnLoad),
       this.scanner.ListAvailableSolutionPaths()
     ]);
     const selectedSourceName = options.selectedSourceName || AllSourcesName;
     const installedPackages = BuildPackageGroups(scanResult.projects.flatMap((project) => project.packages));
-    await this.ApplyLatestVersions(installedPackages, sources, selectedSourceName, options.includePrerelease);
-    await this.ApplyVulnerabilities(installedPackages, scanResult.projects);
+    const backgroundInfo = " (updates and vulnerabilities are loading in background)";
 
     return {
       solutionPath: scanResult.solutionPath,
@@ -109,9 +115,70 @@ export class NugetService {
       status: scanResult.projects.length > 0 ? "success" : "error",
       message:
         scanResult.projects.length > 0
-          ? `Loaded ${scanResult.projects.length} project(s) and ${installedPackages.length} package(s).`
+          ? `Loaded ${scanResult.projects.length} project(s) and ${installedPackages.length} package(s).${backgroundInfo}`
           : scanResult.errors[0]?.message ?? "No projects were loaded."
     };
+  }
+
+  public async LoadWorkspaceBackgroundData(
+    options: OptionsState,
+    projects: NugetWorkspacePayload["projects"]
+  ): Promise<{ installedPackages: PackageGroupInfo[]; sources: NugetSource[]; status: "success" | "error"; message: string }> {
+    const selectedSourceName = options.selectedSourceName || AllSourcesName;
+    const installedPackages = BuildPackageGroups(projects.flatMap((project) => project.packages));
+    const sources = await this.ListSources(false);
+    const results = await Promise.allSettled([
+      this.ApplyLatestVersions(installedPackages, sources, selectedSourceName, options.includePrerelease),
+      this.ApplyVulnerabilities(installedPackages, projects)
+    ]);
+    const failures = results
+      .map((result, index) => ({
+        result,
+        label: index === 0 ? "latest versions" : "vulnerabilities"
+      }))
+      .filter((entry): entry is { result: PromiseRejectedResult; label: string } => entry.result.status === "rejected");
+
+    if (failures.length > 0) {
+      const details = failures
+        .map((entry) => `${entry.label}: ${entry.result.reason instanceof Error ? entry.result.reason.message : "unknown error"}`)
+        .join("; ");
+
+      return {
+        installedPackages,
+        sources,
+        status: "error",
+        message: `Background package enrichment completed with warnings (${details}).`
+      };
+    }
+
+    return {
+      installedPackages,
+      sources,
+      status: "success",
+      message: `Background package enrichment completed for ${installedPackages.length} package group(s).`
+    };
+  }
+
+  public async VerifyWorkspaceState(): Promise<string> {
+    const scanResult = await this.scanner.Scan();
+    const packageGroups = BuildPackageGroups(scanResult.projects.flatMap((project) => project.packages));
+    const totalPackageReferences = scanResult.projects.reduce((total, project) => total + project.packages.length, 0);
+
+    if (scanResult.projects.length === 0) {
+      throw new Error(scanResult.errors[0]?.message ?? "Verification failed because no projects were loaded.");
+    }
+
+    if (scanResult.errors.length > 0) {
+      const details = scanResult.errors
+        .map((entry) => `- ${entry.projectPath || "(workspace)"}: ${entry.message}`)
+        .join("\n");
+
+      throw new Error(
+        `Verification finished with ${scanResult.errors.length} project error(s).\n${details}`
+      );
+    }
+
+    return `Verification completed. Checked ${scanResult.projects.length} project(s), ${packageGroups.length} package group(s), and ${totalPackageReferences} package reference(s).`;
   }
 
   public async BrowsePackages(
@@ -122,7 +189,7 @@ export class NugetService {
     take: number,
     append: boolean
   ): Promise<BrowsePackagesPayload> {
-    const sources = await this.ListSources();
+    const sources = await this.ListSources(false);
     const selectedSources =
       sourceName === AllSourcesName || sourceName.trim().length === 0
         ? sources.filter((candidate) => IsSourceUsableForRequests(candidate))
@@ -192,7 +259,7 @@ export class NugetService {
   }
 
   public async LoadPackageDetails(packageId: string, version: string, sourceName: string, includePrerelease: boolean): Promise<PackageDetailsPayload> {
-    const sources = await this.ListSources();
+    const sources = await this.ListSources(false);
     const candidateSources = SelectPackageDetailsSources(sources, sourceName);
     const errors: string[] = [];
 
@@ -310,7 +377,7 @@ export class NugetService {
 
   public async InstallPackage(request: InstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
     const selectedProjects = projects.filter((project) => request.projectIds.includes(project.id));
-    const sources = await this.ListSources();
+    const sources = await this.ListSources(false);
     const source =
       request.sourceName === AllSourcesName || request.sourceName.trim().length === 0
         ? undefined
@@ -324,11 +391,25 @@ export class NugetService {
       throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before installing packages.");
     }
 
+    const requestedVersion = request.version?.trim();
+    let inPlaceUpdatedProjects = 0;
+
     for (const project of selectedProjects) {
+      const hasPackageReference = project.packages.some((packageReference) => packageReference.id.toLowerCase() === request.packageId.toLowerCase());
+
+      if (hasPackageReference && requestedVersion) {
+        const updated = await this.UpdatePackageVersionInProjectOrCentral(project.path, request.packageId, requestedVersion);
+
+        if (updated) {
+          inPlaceUpdatedProjects += 1;
+          continue;
+        }
+      }
+
       const args = ["add", project.path, "package", request.packageId];
 
-      if (request.version?.trim()) {
-        args.push("--version", request.version.trim());
+      if (requestedVersion) {
+        args.push("--version", requestedVersion);
       }
 
       if (source?.url) {
@@ -338,19 +419,25 @@ export class NugetService {
       await this.RunDotnet(args);
     }
 
-    return `Installed ${request.packageId} in ${selectedProjects.length} project(s).`;
+    const verificationFailures = await this.VerifyPackageApplied(
+      selectedProjects.map((project) => project.id),
+      request.packageId,
+      requestedVersion
+    );
+
+    if (verificationFailures.length > 0) {
+      throw new Error([
+        "Package operation finished, but verification failed for some projects.",
+        ...verificationFailures
+      ].join("\n"));
+    }
+
+    return inPlaceUpdatedProjects > 0
+      ? `Applied ${request.packageId} in ${selectedProjects.length} project(s); ${inPlaceUpdatedProjects} project(s) were updated directly in XML and verified.`
+      : `Installed ${request.packageId} in ${selectedProjects.length} project(s) and verified.`;
   }
 
   public async BulkInstallPackages(request: BulkInstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
-    const sources = await this.ListSources();
-    const source =
-      request.sourceName === AllSourcesName || request.sourceName.trim().length === 0
-        ? undefined
-        : sources.find((candidate) => candidate.name === request.sourceName);
-    if (source && !IsSourceUsableForRequests(source)) {
-      throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before updating packages.");
-    }
-
     let operationCount = 0;
     const failures: string[] = [];
 
@@ -362,17 +449,23 @@ export class NugetService {
       );
 
       for (const project of selectedProjects) {
-        const args = ["add", project.path, "package", item.packageId, "--version", item.version.trim()];
+        const targetVersion = item.version.trim();
 
-        if (source?.url) {
-          args.push("--source", source.url);
+        if (!targetVersion) {
+          failures.push(`Failed to update ${item.packageId} in ${project.name}.\nTarget version is empty.`);
+          continue;
         }
 
         try {
-          await this.RunDotnet(args);
-          operationCount += 1;
+          const updated = await this.UpdatePackageVersionInProjectOrCentral(project.path, item.packageId, targetVersion);
+
+          if (updated) {
+            operationCount += 1;
+          } else {
+            failures.push(`Failed to update ${item.packageId} in ${project.name}.\nNo editable PackageReference or Directory.Packages.props entry was found.`);
+          }
         } catch (error) {
-          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, args, error));
+          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, ["local-xml-update", project.path, item.packageId, targetVersion], error));
         }
       }
     }
@@ -389,7 +482,16 @@ export class NugetService {
       throw new OperationError(message, failures.join("\n\n"));
     }
 
-    return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s).`;
+    const verificationFailures = await this.VerifyBulkPackageUpdates(request);
+
+    if (verificationFailures.length > 0) {
+      throw new OperationError(
+        `Updated ${operationCount} project reference(s), but verification failed for ${verificationFailures.length} project/package pair(s).`,
+        verificationFailures.join("\n\n")
+      );
+    }
+
+    return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s) and verified.`;
   }
 
   public async UninstallPackage(request: UninstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
@@ -411,10 +513,19 @@ export class NugetService {
     return `Uninstalled ${request.packageId} from ${selectedProjects.length} project(s).`;
   }
 
-  public async ListSources(): Promise<NugetSource[]> {
+  public async ListSources(checkHealth = true): Promise<NugetSource[]> {
     try {
       const { stdout } = await this.RunDotnet(["nuget", "list", "source"]);
       const sources = ParseNugetSources(stdout);
+
+      if (!checkHealth) {
+        return sources.map((source) => ({
+          ...source,
+          healthStatus: "unknown",
+          healthMessage: "Skipped on load to keep refresh fast."
+        }));
+      }
+
       const sourceHealth = await MapWithConcurrencyLimit(sources, MaxConcurrentFeedRequests, async (source) => ({
         sourceName: source.name,
         ...(await this.CheckSourceHealth(source))
@@ -430,6 +541,139 @@ export class NugetService {
       const message = error instanceof Error ? error.message : "Unknown error";
       throw new Error(`Could not read NuGet sources through 'dotnet nuget list source'. ${message}`);
     }
+  }
+
+  private GetWorkspaceLoadPerformanceSettings(): WorkspaceLoadPerformanceSettings {
+    const config = vscode.workspace.getConfiguration(WorkspaceConfigurationSection);
+
+    return {
+      networkChecksOnLoad: config.get<boolean>("networkChecksOnLoad", false)
+    };
+  }
+
+  private async UpdatePackageVersionInProjectOrCentral(projectPath: string, packageId: string, version: string): Promise<boolean> {
+    const updatedInProject = await this.UpdatePackageReferenceVersion(projectPath, packageId, version);
+
+    if (updatedInProject) {
+      return true;
+    }
+
+    return await this.UpdateCentralPackageVersion(projectPath, packageId, version);
+  }
+
+  private async UpdatePackageReferenceVersion(projectPath: string, packageId: string, version: string): Promise<boolean> {
+    const projectUri = vscode.Uri.file(projectPath);
+    const { text, hasUtf8Bom } = await ReadUtf8TextFile(projectUri);
+    const updated = ReplacePackageReferenceVersion(text, packageId, version);
+
+    if (updated === text) {
+      return false;
+    }
+
+    await WriteUtf8TextFile(projectUri, updated, hasUtf8Bom);
+    return true;
+  }
+
+  private async UpdateCentralPackageVersion(projectPath: string, packageId: string, version: string): Promise<boolean> {
+    let currentDirectory = path.dirname(projectPath);
+
+    while (true) {
+      const candidatePath = path.join(currentDirectory, "Directory.Packages.props");
+      const candidateUri = vscode.Uri.file(candidatePath);
+
+      try {
+        await vscode.workspace.fs.stat(candidateUri);
+      } catch {
+        const parentDirectory = path.dirname(currentDirectory);
+
+        if (parentDirectory === currentDirectory) {
+          return false;
+        }
+
+        currentDirectory = parentDirectory;
+        continue;
+      }
+
+      const { text, hasUtf8Bom } = await ReadUtf8TextFile(candidateUri);
+      const updated = ReplaceCentralPackageVersion(text, packageId, version);
+
+      if (updated !== text) {
+        await WriteUtf8TextFile(candidateUri, updated, hasUtf8Bom);
+        return true;
+      }
+
+      const parentDirectory = path.dirname(currentDirectory);
+
+      if (parentDirectory === currentDirectory) {
+        return false;
+      }
+
+      currentDirectory = parentDirectory;
+    }
+  }
+
+  private async VerifyPackageApplied(projectIds: string[], packageId: string, expectedVersion?: string): Promise<string[]> {
+    const scanResult = await this.scanner.Scan();
+    const projectsById = new Map(scanResult.projects.map((project) => [project.id, project]));
+    const failures: string[] = [];
+
+    for (const projectId of projectIds) {
+      const project = projectsById.get(projectId);
+
+      if (!project) {
+        failures.push(`Project id '${projectId}' was not found during verification.`);
+        continue;
+      }
+
+      const packageReference = project.packages.find((candidate) => candidate.id.toLowerCase() === packageId.toLowerCase());
+
+      if (!packageReference) {
+        failures.push(`Project '${project.name}' does not reference package '${packageId}' after operation.`);
+        continue;
+      }
+
+      if (expectedVersion?.trim() && packageReference.version.toLowerCase() !== expectedVersion.trim().toLowerCase()) {
+        failures.push(
+          `Project '${project.name}' has '${packageId}' version '${packageReference.version}', expected '${expectedVersion.trim()}'.`
+        );
+      }
+    }
+
+    return failures;
+  }
+
+  private async VerifyBulkPackageUpdates(request: BulkInstallPackageRequest): Promise<string[]> {
+    const scanResult = await this.scanner.Scan();
+    const projectsById = new Map(scanResult.projects.map((project) => [project.id, project]));
+    const failures: string[] = [];
+
+    request.items.forEach((item) => {
+      const expectedVersion = item.version.trim();
+
+      item.projectIds.forEach((projectId) => {
+        const project = projectsById.get(projectId);
+
+        if (!project) {
+          failures.push(`Project id '${projectId}' was not found during verification for package '${item.packageId}'.`);
+          return;
+        }
+
+        const packageReference = project.packages.find((candidate) => candidate.id.toLowerCase() === item.packageId.toLowerCase());
+
+        if (!packageReference) {
+          failures.push(`Project '${project.name}' does not reference package '${item.packageId}' after update.`);
+          return;
+        }
+
+        if (expectedVersion && packageReference.version.toLowerCase() !== expectedVersion.toLowerCase()) {
+          failures.push(
+            `Project '${project.name}' has '${item.packageId}' version '${packageReference.version}', expected '${expectedVersion}'.`
+          );
+        }
+      });
+    });
+
+    return failures;
   }
 
   private async CheckSourceHealth(source: NugetSource): Promise<Pick<NugetSource, "healthStatus" | "healthMessage">> {
@@ -1168,4 +1412,106 @@ function CompareVersions(left: string, right: string): number {
     numeric: true,
     sensitivity: "base"
   });
+}
+
+async function ReadUtf8TextFile(fileUri: vscode.Uri): Promise<{ text: string; hasUtf8Bom: boolean }> {
+  const bytes = await vscode.workspace.fs.readFile(fileUri);
+  const buffer = Buffer.from(bytes);
+  const hasUtf8Bom = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
+  const text = new TextDecoder("utf-8").decode(hasUtf8Bom ? buffer.subarray(3) : buffer);
+
+  return { text, hasUtf8Bom };
+}
+
+async function WriteUtf8TextFile(fileUri: vscode.Uri, text: string, withUtf8Bom: boolean): Promise<void> {
+  const encoded = new TextEncoder().encode(text);
+
+  if (!withUtf8Bom) {
+    await vscode.workspace.fs.writeFile(fileUri, encoded);
+    return;
+  }
+
+  const output = new Uint8Array(encoded.length + 3);
+  output[0] = 0xef;
+  output[1] = 0xbb;
+  output[2] = 0xbf;
+  output.set(encoded, 3);
+  await vscode.workspace.fs.writeFile(fileUri, output);
+}
+
+function ReplacePackageReferenceVersion(xmlText: string, packageId: string, version: string): string {
+  const normalizedId = packageId.toLowerCase();
+  const blockPattern = /<PackageReference\b[^>]*>([\s\S]*?)<\/PackageReference>/gi;
+
+  let updated = xmlText.replace(blockPattern, (fullMatch) => {
+    if (!HasPackageIdInPackageReference(fullMatch, normalizedId)) {
+      return fullMatch;
+    }
+
+    if (/\sVersion\s*=\s*["'][^"']*["']/i.test(fullMatch)) {
+      return fullMatch.replace(/(\sVersion\s*=\s*["'])[^"']*(["'])/i, `$1${EscapeAttribute(version)}$2`);
+    }
+
+    if (/<Version\b[^>]*>[\s\S]*?<\/Version>/i.test(fullMatch)) {
+      return fullMatch.replace(/(<Version\b[^>]*>)[\s\S]*?(<\/Version>)/i, `$1${EscapeXml(version)}$2`);
+    }
+
+    return fullMatch.replace(/\/>\s*$/u, ` Version="${EscapeAttribute(version)}" />`);
+  });
+
+  const selfClosingPattern = /<PackageReference\b[^>]*\/\s*>/gi;
+  updated = updated.replace(selfClosingPattern, (fullMatch) => {
+    if (!HasPackageIdInPackageReference(fullMatch, normalizedId)) {
+      return fullMatch;
+    }
+
+    if (/\sVersion\s*=\s*["'][^"']*["']/i.test(fullMatch)) {
+      return fullMatch.replace(/(\sVersion\s*=\s*["'])[^"']*(["'])/i, `$1${EscapeAttribute(version)}$2`);
+    }
+
+    return fullMatch.replace(/\/>\s*$/u, ` Version="${EscapeAttribute(version)}" />`);
+  });
+
+  return updated;
+}
+
+function ReplaceCentralPackageVersion(xmlText: string, packageId: string, version: string): string {
+  const normalizedId = packageId.toLowerCase();
+  const pattern = /<PackageVersion\b[^>]*\/\s*>|<PackageVersion\b[^>]*>[\s\S]*?<\/PackageVersion>/gi;
+
+  return xmlText.replace(pattern, (fullMatch) => {
+    if (!HasPackageIdInPackageReference(fullMatch, normalizedId, ["Include", "Update"])) {
+      return fullMatch;
+    }
+
+    if (/\sVersion\s*=\s*["'][^"']*["']/i.test(fullMatch)) {
+      return fullMatch.replace(/(\sVersion\s*=\s*["'])[^"']*(["'])/i, `$1${EscapeAttribute(version)}$2`);
+    }
+
+    if (/<Version\b[^>]*>[\s\S]*?<\/Version>/i.test(fullMatch)) {
+      return fullMatch.replace(/(<Version\b[^>]*>)[\s\S]*?(<\/Version>)/i, `$1${EscapeXml(version)}$2`);
+    }
+
+    return fullMatch.replace(/\/>\s*$/u, ` Version="${EscapeAttribute(version)}" />`);
+  });
+}
+
+function HasPackageIdInPackageReference(xmlElement: string, normalizedPackageId: string, attributeNames = ["Include", "Update", "Remove"]): boolean {
+  return attributeNames.some((attributeName) => {
+    const match = new RegExp(`\\b${attributeName}\\s*=\\s*["']([^"']+)["']`, "i").exec(xmlElement);
+    return match ? match[1].trim().toLowerCase() === normalizedPackageId : false;
+  });
+}
+
+function EscapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function EscapeAttribute(value: string): string {
+  return EscapeXml(value)
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }

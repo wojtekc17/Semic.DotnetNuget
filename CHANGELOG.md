@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-05-11
+
+### Added
+
+- Offline-first workspace loading mode that returns project/package data quickly and performs updates/vulnerability enrichment in the background.
+- Background enrichment pipeline for workspace data (`LoadWorkspaceBackgroundData`) with explicit success/warning status messaging.
+- Global `backgroundDataPending` state in workspace payloads, enabling deterministic UI loading behavior while background data is still being fetched.
+- Workspace verification capability (`verifyWorkspace`) in extension messaging and panel handling, including summary/error reporting for scan results.
+- New setting `semicDotnetNuget.workspace.networkChecksOnLoad` to control whether source health probes are executed during initial workspace load.
+
+### Changed
+
+- `LoadWorkspace` no longer blocks on network-heavy latest-version and vulnerability checks; these are now performed asynchronously after the initial payload is shown.
+- Source listing now supports optional health checks (`ListSources(checkHealth)`), and browse/details/install paths use lightweight source reads without health probing to reduce latency.
+- Install/update/consolidate workflow now prefers direct XML version replacement in project files (`.csproj`) or central package management files (`Directory.Packages.props`) before falling back to CLI add behavior.
+- Install and bulk update/consolidate operations now include post-operation verification and return verified success messages.
+- `Updates` and `Vulnerabilities` tabs now show a loading spinner while background enrichment is in progress, removing dead-empty interim states.
+- Tab switching no longer resets background loading progress; loading duration is tied to one global enrichment run rather than active tab changes.
+
+### Fixed
+
+- Fixed empty `Updates` view caused by deferred latest-version resolution by introducing automatic background hydration and second-phase payload delivery.
+- Fixed user-facing stale/ambiguous state during deferred loading by explicitly signaling background pending/completed states to the webview.
+- Improved failure diagnostics for bulk update operations by preserving detailed per-project failure descriptions and verification mismatches.
+
 ## [1.4.0] - 2026-05-08
 
 ### Added
@@ -58,5 +83,6 @@ All notable changes to this project will be documented in this file.
 - Dependency rendering in package details now shows framework groups as an expandable tree.
 - Browse project version tables now show correct current and target versions, and unchecked projects show `-` for target version.
 
+[1.5.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.5.0
 [1.4.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.4.0
 [1.3.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.3.0

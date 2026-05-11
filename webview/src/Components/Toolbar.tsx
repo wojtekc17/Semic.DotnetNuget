@@ -6,6 +6,7 @@ export type BusyAction = "" | "refresh" | "bulk" | "install" | "uninstall" | "so
 export function Toolbar(props: {
   activeTab: TabKey;
   actionBusy: BusyAction;
+  tabLoading: Partial<Record<TabKey, boolean>>;
   bulkSelectedPackageIds: Set<string>;
   includePrerelease: boolean;
   installedPackages: PackageGroupInfo[];
@@ -39,9 +40,11 @@ export function Toolbar(props: {
       <div className="tabs">
         {APP_TABS.map((tab) => {
           const count = tab.key === "updates" ? updatesCount : tab.key === "consolidated" ? consolidatedCount : tab.key === "vulnerabilities" ? vulnerabilitiesCount : 0;
+          const isTabLoading = Boolean(props.tabLoading[tab.key]);
           return (
             <button key={tab.key} className={`tabButton ${props.activeTab === tab.key ? "isActive" : ""}`} type="button" onClick={() => props.onSelectTab(tab.key)}>
               {tab.label}
+              {isTabLoading ? <span className="tabLoadingSpinner"><Spinner /></span> : null}
               {count > 0 ? <span className={tab.key === "vulnerabilities" ? "warningTabBadge" : ""}>{tab.key === "vulnerabilities" ? `! ${count}` : count}</span> : null}
             </button>
           );

@@ -58,6 +58,7 @@ export function App() {
     const [statusMessage, setStatusMessage] = useState("Loading workspace projects and NuGet sources...");
     const [actionBusy, setActionBusy] = useState<BusyAction>("refresh");
     const [workspaceRefreshPending, setWorkspaceRefreshPending] = useState(true);
+    const [backgroundDataPending, setBackgroundDataPending] = useState(false);
     const [solutionPath, setSolutionPath] = useState("");
     const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettingsState>({ useAllProjects: false, solutionPath: "", availableSolutions: [] });
     const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -211,6 +212,7 @@ export function App() {
 
                 pendingRefreshRequestIdRef.current = undefined;
                 setWorkspaceRefreshPending(false);
+                setBackgroundDataPending(Boolean(message.payload.backgroundDataPending));
                 const nextSelectedSourceName = selectedSourceName === ALL_SOURCES || message.payload.sources.some((source) => source.name === selectedSourceName)
                     ? selectedSourceName
                     : message.payload.options.selectedSourceName;
@@ -263,6 +265,7 @@ export function App() {
             if (message.type === "error") {
                 pendingRefreshRequestIdRef.current = undefined;
                 setWorkspaceRefreshPending(false);
+                setBackgroundDataPending(false);
                 browseAppendInFlightRef.current = false;
                 setStatus("error");
                 setStatusMessage(message.payload.message);
@@ -335,6 +338,7 @@ export function App() {
         refreshRequestIdRef.current = requestId;
         pendingRefreshRequestIdRef.current = requestId;
         setWorkspaceRefreshPending(true);
+        setBackgroundDataPending(false);
         setStatus("loading");
         setStatusMessage("Loading workspace projects and NuGet sources...");
         setActionBusy("refresh");
@@ -416,6 +420,14 @@ export function App() {
     const details = selectedPackage ? packageDetails[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)] : undefined;
     const detailsLoading = selectedPackage ? Boolean(packageDetailsLoading[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)]) : false;
     const isWorkspaceReloading = workspaceRefreshPending;
+    const isBackgroundTabLoading = !isWorkspaceReloading && backgroundDataPending && (activeTab === "updates" || activeTab === "vulnerabilities");
+    const tabLoading = {
+        browse: activeTab === "browse" && browseLoading,
+        installed: isWorkspaceReloading,
+        updates: isWorkspaceReloading || backgroundDataPending,
+        consolidated: isWorkspaceReloading,
+        vulnerabilities: isWorkspaceReloading || backgroundDataPending
+    } as const;
     const toolbarBusyAction: BusyAction = isWorkspaceReloading ? "refresh" : actionBusy;
 
     return (
@@ -425,6 +437,7 @@ export function App() {
                     <Toolbar
                         activeTab={activeTab}
                         actionBusy={toolbarBusyAction}
+                        tabLoading={tabLoading}
                         bulkSelectedPackageIds={bulkSelectedPackageIds}
                         includePrerelease={includePrerelease}
                         installedPackages={installedPackages}
@@ -478,6 +491,8 @@ export function App() {
                             />
                         ) : isWorkspaceReloading ? (
                             <LoadingState message="Loading workspace packages..." />
+                        ) : isBackgroundTabLoading ? (
+                            <LoadingState message={activeTab === "updates" ? "Loading available updates..." : "Loading vulnerability data..."} />
                         ) : (
                             <InstalledPackageList
                                 activeTab={activeTab}
