@@ -1,9 +1,40 @@
+import { useEffect, useMemo, useState } from "react";
 import type { SelectedPackageContext } from "../AppTypes";
 import { formatDate, formatDownloads, renderMarkdownPreview } from "../AppUtils";
 import type { PackageDetailsInfo, ProjectError, TabKey } from "../Types";
 
-export function PackageIcon({ iconUrl, preview = false }: { iconUrl?: string; preview?: boolean }) {
-    return <div className={`packageIcon ${preview ? "previewIcon" : ""}`}>{iconUrl ? <img alt="" src={iconUrl} /> : <span>.NET</span>}</div>;
+export function PackageIcon({ iconUrl, packageId, packageVersion, preview = false }: { iconUrl?: string; packageId?: string; packageVersion?: string; preview?: boolean }) {
+    const resolvedIconUrl = useMemo(() => {
+        const explicit = iconUrl?.trim();
+
+        if (explicit) {
+            return explicit;
+        }
+
+        const normalizedPackageId = packageId?.trim().toLowerCase();
+        const normalizedPackageVersion = packageVersion?.trim().toLowerCase();
+
+        if (!normalizedPackageId || !normalizedPackageVersion) {
+            return "";
+        }
+
+        return `https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(normalizedPackageId)}/${encodeURIComponent(normalizedPackageVersion)}/icon`;
+    }, [iconUrl, packageId, packageVersion]);
+    const [hasImageError, setHasImageError] = useState(false);
+
+    useEffect(() => {
+        setHasImageError(false);
+    }, [resolvedIconUrl]);
+
+    const shouldShowImage = resolvedIconUrl.length > 0 && !hasImageError;
+
+    return (
+        <div className={`packageIcon ${preview ? "previewIcon" : ""}`}>
+            {shouldShowImage
+                ? <img alt="" src={resolvedIconUrl} onError={() => setHasImageError(true)} />
+                : <span>.NET</span>}
+        </div>
+    );
 }
 
 export function PackageMetaStrip({ downloads, verified }: { downloads?: number; verified: boolean }) {
