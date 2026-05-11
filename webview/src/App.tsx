@@ -399,7 +399,7 @@ export function App() {
     const selectBrowsePackage = (packageInfo: BrowsePackageInfo) => {
         setSelectedPackageId(packageInfo.id);
         setSelectedPackageVersion(packageInfo.version);
-        setSelectedProjectIds(new Set(projects.map((project) => project.id)));
+        setSelectedProjectIds(new Set());
         setSettingsOpen(false);
         setInfoOpen(false);
         setPreviewTab("details");
@@ -410,7 +410,7 @@ export function App() {
         const version = activeTab === "updates" ? latestVersion || packageGroup.versions.at(-1) || packageGroup.versions[0] || "" : packageGroup.versions.at(-1) || packageGroup.versions[0] || "";
         setSelectedPackageId(packageGroup.id);
         setSelectedPackageVersion(version);
-        setSelectedProjectIds(new Set(packageGroup.projects.map((project) => project.projectId)));
+        setSelectedProjectIds(new Set());
         setSettingsOpen(false);
         setInfoOpen(false);
         setPreviewTab("details");

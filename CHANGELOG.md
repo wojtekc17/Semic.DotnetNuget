@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - Install and bulk update/consolidate operations now include post-operation verification and return verified success messages.
 - `Updates` and `Vulnerabilities` tabs now show a loading spinner while background enrichment is in progress, removing dead-empty interim states.
 - Tab switching no longer resets background loading progress; loading duration is tied to one global enrichment run rather than active tab changes.
+- Project selection is now cleared by default when opening package install/update details, so users explicitly choose target projects before applying changes.
 
 ### Fixed
 
