@@ -104,6 +104,8 @@ export interface ProjectError {
 export interface NugetWorkspacePayload {
   requestId?: number;
   backgroundDataPending?: boolean;
+  updatesDataPending?: boolean;
+  vulnerabilitiesDataPending?: boolean;
   solutionPath?: string;
   workspaceSettings: WorkspaceSettingsState;
   projects: ProjectInfo[];

@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import {
   DefaultOptionsState,
   type ExtensionToWebviewMessage,
+  type PackageGroupInfo,
   type PanelClientState,
   type WebviewToExtensionMessage
 } from "../Types/SharedTypes";
@@ -92,7 +93,9 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         payload: {
           ...payload,
           requestId: options?.requestId,
-          backgroundDataPending: payload.projects.length > 0
+          backgroundDataPending: payload.projects.length > 0,
+          updatesDataPending: payload.projects.length > 0,
+          vulnerabilitiesDataPending: payload.projects.length > 0
         }
       });
       void this.RefreshWorkspaceBackgroundData(refreshSequence, payload, options?.requestId);
@@ -119,9 +122,13 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
       return;
     }
 
-    try {
-      const backgroundPayload = await this.nugetService.LoadWorkspaceBackgroundData(this.clientState.options, currentPayload.projects);
+    let installedPackages = currentPayload.installedPackages;
+    let sources = currentPayload.sources;
 
+    let updatesPending = true;
+    let vulnerabilitiesPending = true;
+
+    const postBackgroundProgress = async (status: "success" | "error", message: string): Promise<void> => {
       if (refreshSequence !== this.refreshSequence) {
         return;
       }
@@ -130,30 +137,100 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         type: "workspaceLoaded",
         payload: {
           ...currentPayload,
-          installedPackages: backgroundPayload.installedPackages,
-          sources: backgroundPayload.sources,
-          status: backgroundPayload.status,
-          message: backgroundPayload.message,
+          installedPackages,
+          sources,
+          status,
+          message,
           requestId,
-          backgroundDataPending: false
+          backgroundDataPending: updatesPending || vulnerabilitiesPending,
+          updatesDataPending: updatesPending,
+          vulnerabilitiesDataPending: vulnerabilitiesPending
         }
       });
-    } catch {
-      if (refreshSequence !== this.refreshSequence) {
-        return;
+    };
+
+    const updatesTask = (async () => {
+      try {
+        const updatesPayload = await this.nugetService.LoadWorkspaceUpdatesData(this.clientState.options, currentPayload.projects);
+
+        installedPackages = this.MergeUpdateFields(installedPackages, updatesPayload.installedPackages);
+        sources = updatesPayload.sources;
+        updatesPending = false;
+        await postBackgroundProgress(updatesPayload.status, updatesPayload.message);
+      } catch {
+        updatesPending = false;
+        await postBackgroundProgress("error", "Background loading of updates failed.");
+      }
+    })();
+
+    const vulnerabilitiesTask = (async () => {
+      try {
+        const vulnerabilitiesPayload = await this.nugetService.LoadWorkspaceVulnerabilitiesData(
+          currentPayload.projects,
+          this.ClonePackageGroups(currentPayload.installedPackages)
+        );
+
+        installedPackages = this.MergeVulnerabilityFields(installedPackages, vulnerabilitiesPayload.installedPackages);
+        vulnerabilitiesPending = false;
+        await postBackgroundProgress(vulnerabilitiesPayload.status, vulnerabilitiesPayload.message);
+      } catch {
+        vulnerabilitiesPending = false;
+        await postBackgroundProgress("error", "Background loading of vulnerabilities failed.");
+      }
+    })();
+
+    await Promise.allSettled([updatesTask, vulnerabilitiesTask]);
+  }
+
+  private ClonePackageGroups(groups: PackageGroupInfo[]): PackageGroupInfo[] {
+    return groups.map((group) => ({
+      ...group,
+      versions: [...group.versions],
+      projects: [...group.projects],
+      availableSourceNames: group.availableSourceNames ? [...group.availableSourceNames] : undefined,
+      latestVersionBySource: group.latestVersionBySource ? { ...group.latestVersionBySource } : undefined,
+      vulnerabilities: [...group.vulnerabilities]
+    }));
+  }
+
+  private MergeUpdateFields(baseGroups: PackageGroupInfo[], updateGroups: PackageGroupInfo[]): PackageGroupInfo[] {
+    const updateById = new Map(updateGroups.map((group) => [group.id.toLowerCase(), group]));
+
+    return baseGroups.map((group) => {
+      const update = updateById.get(group.id.toLowerCase());
+
+      if (!update) {
+        return group;
       }
 
-      await this.PostMessage({
-        type: "workspaceLoaded",
-        payload: {
-          ...currentPayload,
-          requestId,
-          backgroundDataPending: false,
-          status: "error",
-          message: "Background loading of updates and vulnerabilities failed."
-        }
-      });
-    }
+      return {
+        ...group,
+        availableInSelectedSource: update.availableInSelectedSource,
+        availableSourceNames: update.availableSourceNames,
+        latestVersion: update.latestVersion,
+        latestVersionBySource: update.latestVersionBySource,
+        latestVersionInAllSources: update.latestVersionInAllSources,
+        hasUpdate: update.hasUpdate,
+        hasUpdateInAllSources: update.hasUpdateInAllSources
+      };
+    });
+  }
+
+  private MergeVulnerabilityFields(baseGroups: PackageGroupInfo[], vulnerabilityGroups: PackageGroupInfo[]): PackageGroupInfo[] {
+    const vulnerabilityById = new Map(vulnerabilityGroups.map((group) => [group.id.toLowerCase(), group]));
+
+    return baseGroups.map((group) => {
+      const vulnerabilityData = vulnerabilityById.get(group.id.toLowerCase());
+
+      if (!vulnerabilityData) {
+        return group;
+      }
+
+      return {
+        ...group,
+        vulnerabilities: vulnerabilityData.vulnerabilities
+      };
+    });
   }
 
   public dispose(): void {

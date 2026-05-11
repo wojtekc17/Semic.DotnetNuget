@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - Fixed empty `Updates` view caused by deferred latest-version resolution by introducing automatic background hydration and second-phase payload delivery.
 - Fixed user-facing stale/ambiguous state during deferred loading by explicitly signaling background pending/completed states to the webview.
 - Improved failure diagnostics for bulk update operations by preserving detailed per-project failure descriptions and verification mismatches.
+- Fixed package icon resolution in tabs other than `Browse` by using NuGet icon fallback URLs based on package id and version.
 
 ## [1.4.0] - 2026-05-08
 

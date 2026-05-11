@@ -28,7 +28,7 @@ const AllSourcesName = "__all__";
 const FeedRequestTimeoutMs = 10000;
 const SourceHealthTimeoutMs = 2500;
 const MaxConcurrentFeedRequests = 4;
-const MaxConcurrentDotnetCommands = 2;
+const MaxConcurrentDotnetCommands = 4;
 const WorkspaceConfigurationSection = "semicDotnetNuget.workspace";
 
 interface WorkspaceLoadPerformanceSettings {
@@ -120,43 +120,55 @@ export class NugetService {
     };
   }
 
-  public async LoadWorkspaceBackgroundData(
+  public async LoadWorkspaceUpdatesData(
     options: OptionsState,
     projects: NugetWorkspacePayload["projects"]
   ): Promise<{ installedPackages: PackageGroupInfo[]; sources: NugetSource[]; status: "success" | "error"; message: string }> {
     const selectedSourceName = options.selectedSourceName || AllSourcesName;
     const installedPackages = BuildPackageGroups(projects.flatMap((project) => project.packages));
     const sources = await this.ListSources(false);
-    const results = await Promise.allSettled([
-      this.ApplyLatestVersions(installedPackages, sources, selectedSourceName, options.includePrerelease),
-      this.ApplyVulnerabilities(installedPackages, projects)
-    ]);
-    const failures = results
-      .map((result, index) => ({
-        result,
-        label: index === 0 ? "latest versions" : "vulnerabilities"
-      }))
-      .filter((entry): entry is { result: PromiseRejectedResult; label: string } => entry.result.status === "rejected");
+    try {
+      await this.ApplyLatestVersions(installedPackages, sources, selectedSourceName, options.includePrerelease);
 
-    if (failures.length > 0) {
-      const details = failures
-        .map((entry) => `${entry.label}: ${entry.result.reason instanceof Error ? entry.result.reason.message : "unknown error"}`)
-        .join("; ");
+      return {
+        installedPackages,
+        sources,
+        status: "success",
+        message: `Background updates scan completed for ${installedPackages.length} package group(s).`
+      };
+    } catch (error) {
+      const details = error instanceof Error ? error.message : "unknown error";
 
       return {
         installedPackages,
         sources,
         status: "error",
-        message: `Background package enrichment completed with warnings (${details}).`
+        message: `Background updates scan completed with warnings (${details}).`
       };
     }
+  }
 
-    return {
-      installedPackages,
-      sources,
-      status: "success",
-      message: `Background package enrichment completed for ${installedPackages.length} package group(s).`
-    };
+  public async LoadWorkspaceVulnerabilitiesData(
+    projects: NugetWorkspacePayload["projects"],
+    installedPackages: PackageGroupInfo[]
+  ): Promise<{ installedPackages: PackageGroupInfo[]; status: "success" | "error"; message: string }> {
+    try {
+      await this.ApplyVulnerabilities(installedPackages, projects);
+
+      return {
+        installedPackages,
+        status: "success",
+        message: `Background vulnerabilities scan completed for ${installedPackages.length} package group(s).`
+      };
+    } catch (error) {
+      const details = error instanceof Error ? error.message : "unknown error";
+
+      return {
+        installedPackages,
+        status: "error",
+        message: `Background vulnerabilities scan completed with warnings (${details}).`
+      };
+    }
   }
 
   public async VerifyWorkspaceState(): Promise<string> {
