@@ -27,8 +27,8 @@ const execFileAsync = promisify(execFile);
 const AllSourcesName = "__all__";
 const FeedRequestTimeoutMs = 10000;
 const SourceHealthTimeoutMs = 2500;
-const MaxConcurrentFeedRequests = 4;
-const MaxConcurrentDotnetCommands = 4;
+const MaxFeedConcurrency = 6;
+const MaxDotnetConcurrency = 6;
 const WorkspaceConfigurationSection = "semicDotnetNuget.workspace";
 
 interface WorkspaceLoadPerformanceSettings {
@@ -538,7 +538,7 @@ export class NugetService {
         }));
       }
 
-      const sourceHealth = await MapWithConcurrencyLimit(sources, MaxConcurrentFeedRequests, async (source) => ({
+      const sourceHealth = await MapWithConcurrencyLimit(sources, MaxFeedConcurrency, async (source) => ({
         sourceName: source.name,
         ...(await this.CheckSourceHealth(source))
       }));
@@ -717,7 +717,7 @@ export class NugetService {
     packageGroups: PackageGroupInfo[],
     projects: NugetWorkspacePayload["projects"]
   ): Promise<void> {
-    const vulnerabilityResults = await MapWithConcurrencyLimit(projects, MaxConcurrentDotnetCommands, async (project) => await this.LoadProjectVulnerabilities(project));
+    const vulnerabilityResults = await MapWithConcurrencyLimit(projects, MaxDotnetConcurrency, async (project) => await this.LoadProjectVulnerabilities(project));
     const vulnerabilitiesByPackage = new Map<string, PackageVulnerabilityInfo[]>();
 
     vulnerabilityResults.flat().forEach((vulnerability) => {
@@ -744,7 +744,8 @@ export class NugetService {
     selectedSourceName: string,
     includePrerelease: boolean
   ): Promise<void> {
-    const sourceRegistrations = (await MapWithConcurrencyLimit(SelectPackageAvailabilitySources(sources, AllSourcesName), MaxConcurrentFeedRequests, async (source) => {
+    const availabilitySources = SelectPackageAvailabilitySources(sources, AllSourcesName);
+    const sourceRegistrations = (await MapWithConcurrencyLimit(availabilitySources, MaxFeedConcurrency, async (source) => {
       try {
         return {
           source,
@@ -770,7 +771,7 @@ export class NugetService {
       return pending;
     };
 
-    await MapWithConcurrencyLimit(packageGroups, MaxConcurrentFeedRequests, async (packageGroup) => {
+    await MapWithConcurrencyLimit(packageGroups, MaxFeedConcurrency, async (packageGroup) => {
       const latestVersionEntries = (await Promise.all(sourceRegistrations.map(async (registration) => {
         try {
           const versions = await loadVersions(registration, packageGroup.id);
