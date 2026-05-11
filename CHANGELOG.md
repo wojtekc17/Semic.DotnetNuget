@@ -4,11 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [1.5.1] - 2026-05-11
 
+### Changed
+
+- In the `Browse` tab, selecting a package now preselects only projects where that package is already installed; other projects remain unchecked.
+
 ### Fixed
 
 - Fixed vulnerabilities scanning regression where a single invalid or unreachable NuGet source could prevent package vulnerability detection.
 - Added resilient vulnerability scan fallback flow using `--ignore-failed-sources` and a healthy-source fallback when available.
 - Fixed `Vulnerabilities` tab filtering so vulnerable installed packages are visible even when they are unavailable in the currently selected feed.
+- Updated Playwright coverage for package action states across tabs (`Browse`, `Installed`, `Updates`, `Consolidated`, `Vulnerabilities`) to match the current preselection behavior.
+- Stabilized `Browse` package selection tests by using exact heading matches and deterministic `browsePackagesLoaded` test payload handling.
 
 ## [1.5.0] - 2026-05-11
 
