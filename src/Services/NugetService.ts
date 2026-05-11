@@ -74,6 +74,7 @@ class OperationError extends Error {
 export class NugetService {
   private sourceAuthHeadersByName = new Map<string, string>();
   private sourceCredentialsByName = new Map<string, { username: string; password: string; hasPassword: boolean }>();
+  private vulnerabilityFallbackSourceUrl: string | null | undefined;
 
   public constructor(private readonly scanner: WorkspaceScanner, private readonly dotnetCliHome: string) { }
 
@@ -324,6 +325,7 @@ export class NugetService {
     this.AppendSourceAuthentication(args, request);
 
     await this.RunDotnet(args);
+    this.vulnerabilityFallbackSourceUrl = undefined;
     await this.SetConfiguredSource(request.name.trim());
   }
 
@@ -345,6 +347,7 @@ export class NugetService {
     const args = ["nuget", "update", "source", originalName, "--source", url];
     this.AppendSourceAuthentication(args, request);
     await this.RunDotnet(args);
+    this.vulnerabilityFallbackSourceUrl = undefined;
     await this.SetConfiguredSource(name);
   }
 
@@ -356,6 +359,7 @@ export class NugetService {
     }
 
     await this.RunDotnet(["nuget", "remove", "source", name]);
+    this.vulnerabilityFallbackSourceUrl = undefined;
 
     const configuredSource = vscode.workspace.getConfiguration("semicDotnetNuget").get<string>("source", "").trim();
 
@@ -372,6 +376,7 @@ export class NugetService {
     }
 
     await this.RunDotnet(["nuget", "enable", "source", trimmedName]);
+    this.vulnerabilityFallbackSourceUrl = undefined;
   }
 
   public async DisableSource(name: string): Promise<void> {
@@ -382,6 +387,7 @@ export class NugetService {
     }
 
     await this.RunDotnet(["nuget", "disable", "source", trimmedName]);
+    this.vulnerabilityFallbackSourceUrl = undefined;
 
     const configuredSource = vscode.workspace.getConfiguration("semicDotnetNuget").get<string>("source", "").trim();
 
@@ -838,17 +844,48 @@ export class NugetService {
   }
 
   private async LoadProjectVulnerabilities(project: NugetWorkspacePayload["projects"][number]): Promise<Array<PackageVulnerabilityInfo & { packageId: string }>> {
-    try {
-      const { stdout } = await this.RunDotnet(["list", project.path, "package", "--vulnerable", "--include-transitive", "--format", "json"]);
-      const parsed = JSON.parse(stdout) as unknown;
-      return ExtractVulnerabilities(parsed).map((vulnerability) => ({
-        ...vulnerability,
-        projectId: project.id,
-        projectName: project.name
-      }));
-    } catch {
-      return [];
+    const baseArgs = ["list", project.path, "package", "--vulnerable", "--include-transitive", "--format", "json"];
+    const fallbackSourceUrl = await this.ResolveVulnerabilityFallbackSourceUrl();
+    const argumentSets: string[][] = [[...baseArgs, "--ignore-failed-sources"]];
+
+    if (fallbackSourceUrl) {
+      argumentSets.push([...baseArgs, "--source", fallbackSourceUrl]);
     }
+
+    argumentSets.push(baseArgs);
+
+    for (const args of argumentSets) {
+      try {
+        const { stdout } = await this.RunDotnet(args);
+        const parsed = JSON.parse(stdout) as unknown;
+
+        return ExtractVulnerabilities(parsed).map((vulnerability) => ({
+          ...vulnerability,
+          projectId: project.id,
+          projectName: project.name
+        }));
+      } catch {
+        // Try next strategy.
+      }
+    }
+
+    return [];
+  }
+
+  private async ResolveVulnerabilityFallbackSourceUrl(): Promise<string | undefined> {
+    if (this.vulnerabilityFallbackSourceUrl !== undefined) {
+      return this.vulnerabilityFallbackSourceUrl ?? undefined;
+    }
+
+    try {
+      const sources = await this.ListSources(true);
+      const fallbackSource = sources.find((source) => IsSourceUsableForRequests(source) && IsHttpSource(source.url));
+      this.vulnerabilityFallbackSourceUrl = fallbackSource?.url?.trim() ? fallbackSource.url.trim() : null;
+    } catch {
+      this.vulnerabilityFallbackSourceUrl = null;
+    }
+
+    return this.vulnerabilityFallbackSourceUrl ?? undefined;
   }
 
   private GetSourceRequestHeaders(sourceName: string): Record<string, string> | undefined {

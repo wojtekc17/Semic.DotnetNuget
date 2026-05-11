@@ -27,7 +27,9 @@ export function getVisibleInstalledGroups(installedPackages: PackageGroupInfo[],
             ? packageGroup.availableSourceNames.includes(selectedSourceName)
             : packageGroup.availableInSelectedSource !== false;
 
-        if (selectedSourceName !== ALL_SOURCES && !isAvailableInSelectedSource) {
+        // Vulnerability results are about installed references in projects,
+        // so they should not disappear when a package is unavailable in the selected source.
+        if (activeTab !== "vulnerabilities" && selectedSourceName !== ALL_SOURCES && !isAvailableInSelectedSource) {
             return false;
         }
 

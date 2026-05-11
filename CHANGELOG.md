@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-05-11
+
+### Fixed
+
+- Fixed vulnerabilities scanning regression where a single invalid or unreachable NuGet source could prevent package vulnerability detection.
+- Added resilient vulnerability scan fallback flow using `--ignore-failed-sources` and a healthy-source fallback when available.
+- Fixed `Vulnerabilities` tab filtering so vulnerable installed packages are visible even when they are unavailable in the currently selected feed.
+
 ## [1.5.0] - 2026-05-11
 
 ### Added
@@ -87,6 +95,7 @@ All notable changes to this project will be documented in this file.
 - Dependency rendering in package details now shows framework groups as an expandable tree.
 - Browse project version tables now show correct current and target versions, and unchecked projects show `-` for target version.
 
+[1.5.1]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.5.1
 [1.5.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.5.0
 [1.4.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.4.0
 [1.3.0]: https://github.com/wojtekc17/Semic.DotnetNuget/tree/v1.3.0
