@@ -231,7 +231,12 @@ export function App() {
                 setActionBusy("");
                 setSourceActionName("");
                 setBulkSelectionKey("");
-                setSourceFormOpen(false);
+
+                // Keep settings form open during background refresh updates.
+                // Close it only after source add/update/remove workflows complete.
+                if (actionBusy === "source") {
+                    setSourceFormOpen(false);
+                }
 
                 if (activeTab === "browse") {
                     scheduleBrowse({ immediate: true, query: searchTerm, sourceName: nextSelectedSourceName, prerelease: message.payload.options.includePrerelease });
@@ -564,8 +569,14 @@ export function App() {
                             onEditSource={(source) => {
                                 setSourceFormOpen(true);
                                 setSourceEditName(source.name);
-                                setSourceAuthMode("none");
-                                setSourceDraft({ name: source.name, url: source.url, username: "", password: "" });
+                                const nextAuthMode = source.authMode === "basic" || source.username || source.password ? "basic" : "none";
+                                setSourceAuthMode(nextAuthMode);
+                                setSourceDraft({
+                                    name: source.name,
+                                    url: source.url,
+                                    username: source.username ?? "",
+                                    password: source.password ?? ""
+                                });
                             }}
                             onEnableSource={(sourceName) => {
                                 setSources((current) => current.map((source) => source.name === sourceName ? { ...source, enabled: true, healthStatus: "unknown", healthMessage: "Checking source health..." } : source));

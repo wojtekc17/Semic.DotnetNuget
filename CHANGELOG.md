@@ -28,6 +28,8 @@ All notable changes to this project will be documented in this file.
 - Fixed user-facing stale/ambiguous state during deferred loading by explicitly signaling background pending/completed states to the webview.
 - Improved failure diagnostics for bulk update operations by preserving detailed per-project failure descriptions and verification mismatches.
 - Fixed package icon resolution in tabs other than `Browse` by using NuGet icon fallback URLs based on package id and version.
+- Fixed settings UX during background refresh so the source edit form is no longer closed while left-side tabs continue loading.
+- Improved private feed authentication by reading source credentials from `NuGet.Config` and applying auth headers for source health, browse, details and update metadata requests.
 
 ## [1.4.0] - 2026-05-08
 

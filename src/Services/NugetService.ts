@@ -72,6 +72,9 @@ class OperationError extends Error {
 }
 
 export class NugetService {
+  private sourceAuthHeadersByName = new Map<string, string>();
+  private sourceCredentialsByName = new Map<string, { username: string; password: string; hasPassword: boolean }>();
+
   public constructor(private readonly scanner: WorkspaceScanner, private readonly dotnetCliHome: string) { }
 
   public async SelectWorkspaceSolution(): Promise<boolean> {
@@ -225,7 +228,7 @@ export class NugetService {
       const results = await Promise.allSettled(
         selectedSources.map(async (source) => ({
           source,
-          packages: await SearchSource(source.url, query, includePrerelease, skip, take)
+          packages: await SearchSource(source.url, query, includePrerelease, skip, take, this.GetSourceRequestHeaders(source.name))
         }))
       );
       const packagesById = new Map<string, BrowsePackageInfo>();
@@ -282,7 +285,7 @@ export class NugetService {
     let bestResult: { details: PackageDetailsPayload["details"]; sourceName: string } | undefined;
     for (const source of candidateSources) {
       try {
-        const details = await FetchPackageDetails(source.url, packageId, version, includePrerelease);
+        const details = await FetchPackageDetails(source.url, packageId, version, includePrerelease, this.GetSourceRequestHeaders(source.name));
         const result = { details, sourceName: source.name };
 
         if (!bestResult || ScorePackageDetails(result.details) > ScorePackageDetails(bestResult.details)) {
@@ -529,10 +532,16 @@ export class NugetService {
     try {
       const { stdout } = await this.RunDotnet(["nuget", "list", "source"]);
       const sources = ParseNugetSources(stdout);
+      const authContext = await this.LoadSourceAuthContext(sources);
+      this.sourceAuthHeadersByName = authContext.headersBySourceName;
+      this.sourceCredentialsByName = authContext.credentialsBySourceName;
 
       if (!checkHealth) {
         return sources.map((source) => ({
           ...source,
+          authMode: this.sourceCredentialsByName.has(source.name.toLowerCase()) ? "basic" : "none",
+          username: this.sourceCredentialsByName.get(source.name.toLowerCase())?.username ?? "",
+          password: this.sourceCredentialsByName.get(source.name.toLowerCase())?.password ?? "",
           healthStatus: "unknown",
           healthMessage: "Skipped on load to keep refresh fast."
         }));
@@ -546,6 +555,9 @@ export class NugetService {
 
       return sources.map((source) => ({
         ...source,
+        authMode: this.sourceCredentialsByName.has(source.name.toLowerCase()) ? "basic" : "none",
+        username: this.sourceCredentialsByName.get(source.name.toLowerCase())?.username ?? "",
+        password: this.sourceCredentialsByName.get(source.name.toLowerCase())?.password ?? "",
         healthStatus: healthBySource.get(source.name)?.healthStatus ?? "unknown",
         healthMessage: healthBySource.get(source.name)?.healthMessage ?? "Source status was not checked."
       }));
@@ -691,7 +703,7 @@ export class NugetService {
   private async CheckSourceHealth(source: NugetSource): Promise<Pick<NugetSource, "healthStatus" | "healthMessage">> {
     try {
       if (IsHttpSource(source.url)) {
-        await FetchServiceIndex(source.url, SourceHealthTimeoutMs);
+        await FetchServiceIndex(source.url, SourceHealthTimeoutMs, this.GetSourceRequestHeaders(source.name));
 
         return {
           healthStatus: "ok",
@@ -745,20 +757,25 @@ export class NugetService {
     includePrerelease: boolean
   ): Promise<void> {
     const availabilitySources = SelectPackageAvailabilitySources(sources, AllSourcesName);
-    const sourceRegistrations = (await MapWithConcurrencyLimit(availabilitySources, MaxFeedConcurrency, async (source) => {
+    const sourceRegistrationCandidates = await MapWithConcurrencyLimit(availabilitySources, MaxFeedConcurrency, async (source) => {
       try {
+        const requestHeaders = this.GetSourceRequestHeaders(source.name);
         return {
           source,
-          registrationsBaseUrl: await ResolveRegistrationsBaseUrl(source.url)
+          registrationsBaseUrl: await ResolveRegistrationsBaseUrl(source.url, requestHeaders),
+          requestHeaders
         };
       } catch {
         return undefined;
       }
-    })).filter((entry): entry is { source: NugetSource; registrationsBaseUrl: string } => Boolean(entry));
+    });
+    const sourceRegistrations = sourceRegistrationCandidates.filter(
+      (entry): entry is { source: NugetSource; registrationsBaseUrl: string; requestHeaders: Record<string, string> | undefined } => entry !== undefined
+    );
 
     const versionsCache = new Map<string, Promise<string[]>>();
 
-    const loadVersions = (entry: { source: NugetSource; registrationsBaseUrl: string }, packageId: string): Promise<string[]> => {
+    const loadVersions = (entry: { source: NugetSource; registrationsBaseUrl: string; requestHeaders: Record<string, string> | undefined }, packageId: string): Promise<string[]> => {
       const cacheKey = `${entry.source.name}\n${entry.registrationsBaseUrl}\n${packageId.toLowerCase()}\n${includePrerelease ? "prerelease" : "stable"}`;
       const cached = versionsCache.get(cacheKey);
 
@@ -766,7 +783,7 @@ export class NugetService {
         return cached;
       }
 
-      const pending = FetchPackageVersionsFromRegistrationsBaseUrl(entry.registrationsBaseUrl, packageId, includePrerelease);
+      const pending = FetchPackageVersionsFromRegistrationsBaseUrl(entry.registrationsBaseUrl, packageId, includePrerelease, entry.requestHeaders);
       versionsCache.set(cacheKey, pending);
       return pending;
     };
@@ -832,6 +849,114 @@ export class NugetService {
     } catch {
       return [];
     }
+  }
+
+  private GetSourceRequestHeaders(sourceName: string): Record<string, string> | undefined {
+    const authorization = this.sourceAuthHeadersByName.get(sourceName.toLowerCase());
+
+    if (!authorization) {
+      return undefined;
+    }
+
+    return { Authorization: authorization };
+  }
+
+  private async LoadSourceAuthContext(sources: NugetSource[]): Promise<{
+    headersBySourceName: Map<string, string>;
+    credentialsBySourceName: Map<string, { username: string; password: string; hasPassword: boolean }>;
+  }> {
+    const sourceNames = new Set(sources.map((source) => source.name.toLowerCase()));
+    const credentialsBySourceName = new Map<string, { username: string; password: string; hasPassword: boolean }>();
+    const configPaths = await this.ListNugetConfigPaths();
+
+    for (const configPath of configPaths) {
+      let xmlText = "";
+
+      try {
+        const content = await vscode.workspace.fs.readFile(vscode.Uri.file(configPath));
+        xmlText = new TextDecoder("utf-8").decode(content);
+      } catch {
+        continue;
+      }
+
+      const credentials = ParseNugetConfigPackageSourceCredentials(xmlText);
+
+      credentials.forEach((entry) => {
+        const sourceName = entry.sourceName.toLowerCase();
+
+        if (!sourceNames.has(sourceName) || !entry.username || !entry.hasPassword) {
+          return;
+        }
+
+        credentialsBySourceName.set(sourceName, {
+          username: entry.username,
+          password: entry.password ?? "",
+          hasPassword: entry.hasPassword
+        });
+      });
+    }
+
+    const headersBySourceName = new Map<string, string>();
+
+    credentialsBySourceName.forEach((credentials, sourceName) => {
+      if (!credentials.password) {
+        return;
+      }
+
+      const token = Buffer.from(`${credentials.username}:${credentials.password}`, "utf-8").toString("base64");
+      headersBySourceName.set(sourceName, `Basic ${token}`);
+    });
+
+    return {
+      headersBySourceName,
+      credentialsBySourceName
+    };
+  }
+
+  private async ListNugetConfigPaths(): Promise<string[]> {
+    const candidates: string[] = [];
+    const seen = new Set<string>();
+
+    const pushCandidate = (candidatePath: string): void => {
+      const normalized = path.normalize(candidatePath).toLowerCase();
+
+      if (seen.has(normalized)) {
+        return;
+      }
+
+      seen.add(normalized);
+      candidates.push(candidatePath);
+    };
+
+    const appData = process.env.APPDATA;
+
+    if (appData) {
+      pushCandidate(path.join(appData, "NuGet", "NuGet.Config"));
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+
+    workspaceFolders.forEach((workspaceFolder) => {
+      const chain = BuildAncestorPathChain(workspaceFolder.uri.fsPath);
+
+      chain.forEach((directory) => {
+        pushCandidate(path.join(directory, "NuGet.Config"));
+        pushCandidate(path.join(directory, "nuget.config"));
+      });
+    });
+
+    const existingPaths: string[] = [];
+
+    for (const candidate of candidates) {
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.file(candidate));
+        existingPaths.push(candidate);
+      } catch {
+        // Skip missing config path.
+      }
+    }
+
+    return existingPaths;
   }
 
   private AppendSourceAuthentication(args: string[], request: AddSourceRequest): void {
@@ -969,6 +1094,127 @@ function ParseNugetSources(output: string): NugetSource[] {
   return sources;
 }
 
+function ParseNugetConfigPackageSourceCredentials(xmlText: string): Array<{ sourceName: string; username?: string; password?: string; hasPassword: boolean }> {
+  const credentials: Array<{ sourceName: string; username?: string; password?: string; hasPassword: boolean }> = [];
+  const packageSourceCredentialsBlocks = xmlText.match(/<packageSourceCredentials\b[^>]*>[\s\S]*?<\/packageSourceCredentials>/gi) ?? [];
+
+  packageSourceCredentialsBlocks.forEach((block) => {
+    const blockBody = block
+      .replace(/^<packageSourceCredentials\b[^>]*>/i, "")
+      .replace(/<\/packageSourceCredentials>\s*$/i, "");
+    const sourceBlocks = blockBody.match(/<([A-Za-z_][\w.\-]*)\b[^>]*>[\s\S]*?<\/\1>/g) ?? [];
+
+    sourceBlocks.forEach((sourceBlock) => {
+      const sourceTagMatch = /^<([A-Za-z_][\w.\-]*)\b/i.exec(sourceBlock.trim());
+
+      if (!sourceTagMatch) {
+        return;
+      }
+
+      const sourceName = DecodeNugetConfigElementName(sourceTagMatch[1]);
+      const addElements = sourceBlock.match(/<add\b[^>]*\/?>/gi) ?? [];
+      let username: string | undefined;
+      let clearTextPassword: string | undefined;
+      let encryptedPasswordPresent = false;
+
+      addElements.forEach((addElement) => {
+        const attributes = ParseXmlAttributes(addElement);
+        const key = (attributes.key ?? "").trim().toLowerCase();
+        const value = attributes.value?.trim();
+
+        if (!value) {
+          return;
+        }
+
+        if (key === "username") {
+          username = DecodeXmlEntities(value);
+        }
+
+        if (key === "cleartextpassword") {
+          clearTextPassword = DecodeXmlEntities(value);
+        }
+
+        if (key === "password") {
+          encryptedPasswordPresent = true;
+        }
+      });
+
+      if (sourceName.trim().length === 0) {
+        return;
+      }
+
+      credentials.push({
+        sourceName,
+        username,
+        password: clearTextPassword,
+        hasPassword: Boolean(clearTextPassword) || encryptedPasswordPresent
+      });
+    });
+  });
+
+  return credentials;
+}
+
+function ParseXmlAttributes(tag: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const pattern = /(\w+)\s*=\s*"([^"]*)"|(\w+)\s*=\s*'([^']*)'/g;
+  let match = pattern.exec(tag);
+
+  while (match) {
+    const key = (match[1] ?? match[3] ?? "").toLowerCase();
+    const value = match[2] ?? match[4] ?? "";
+
+    if (key) {
+      attributes[key] = value;
+    }
+
+    match = pattern.exec(tag);
+  }
+
+  return attributes;
+}
+
+function DecodeNugetConfigElementName(value: string): string {
+  return value.replace(/_x([0-9a-fA-F]{4})_/g, (_, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+function DecodeXmlEntities(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function BuildAncestorPathChain(startPath: string): string[] {
+  const normalized = path.resolve(startPath);
+  const chain: string[] = [];
+  const stack: string[] = [];
+  let current = normalized;
+
+  while (true) {
+    stack.push(current);
+    const parent = path.dirname(current);
+
+    if (parent === current) {
+      break;
+    }
+
+    current = parent;
+  }
+
+  while (stack.length > 0) {
+    const next = stack.pop();
+
+    if (next) {
+      chain.push(next);
+    }
+  }
+
+  return chain;
+}
+
 function ExtractVulnerabilities(value: unknown): Array<{
   packageId: string;
   version: string;
@@ -1052,14 +1298,14 @@ function IsHttpSource(sourceUrl: string): boolean {
   return /^https?:\/\//i.test(sourceUrl.trim());
 }
 
-async function SearchSource(sourceUrl: string, query: string, includePrerelease: boolean, skip: number, take: number): Promise<BrowsePackageInfo[]> {
+async function SearchSource(sourceUrl: string, query: string, includePrerelease: boolean, skip: number, take: number, requestHeaders?: Record<string, string>): Promise<BrowsePackageInfo[]> {
   const serviceIndexUrl = sourceUrl.trim();
 
   if (!IsHttpSource(serviceIndexUrl)) {
     throw new Error("Browsing is available for HTTP NuGet v3 sources. Local sources are listed in settings but cannot be searched in this view.");
   }
 
-  const serviceIndex = await FetchServiceIndex(serviceIndexUrl);
+  const serviceIndex = await FetchServiceIndex(serviceIndexUrl, FeedRequestTimeoutMs, requestHeaders);
   const searchService = FindServiceResource(serviceIndex, "searchqueryservice");
 
   if (!searchService?.["@id"]) {
@@ -1086,7 +1332,7 @@ async function SearchSource(sourceUrl: string, query: string, includePrerelease:
         version?: string;
       }>;
     }>;
-  }>(url.toString());
+  }>(url.toString(), FeedRequestTimeoutMs, requestHeaders);
 
   return (result.data ?? []).map((item) => ({
     id: item.id ?? "",
@@ -1100,16 +1346,22 @@ async function SearchSource(sourceUrl: string, query: string, includePrerelease:
   }));
 }
 
-async function FetchPackageDetails(sourceUrl: string, packageId: string, version: string, includePrerelease: boolean): Promise<PackageDetailsPayload["details"]> {
-  const serviceIndex = await FetchServiceIndex(sourceUrl);
+async function FetchPackageDetails(
+  sourceUrl: string,
+  packageId: string,
+  version: string,
+  includePrerelease: boolean,
+  requestHeaders?: Record<string, string>
+): Promise<PackageDetailsPayload["details"]> {
+  const serviceIndex = await FetchServiceIndex(sourceUrl, FeedRequestTimeoutMs, requestHeaders);
   const registrationsBaseUrl = GetRegistrationsBaseUrl(serviceIndex);
 
-  const registration = await FetchRegistrationLeaf(registrationsBaseUrl, packageId, version);
-  const catalogEntry = await ResolveCatalogEntry(registration.catalogEntry);
+  const registration = await FetchRegistrationLeaf(registrationsBaseUrl, packageId, version, requestHeaders);
+  const catalogEntry = await ResolveCatalogEntry(registration.catalogEntry, requestHeaders);
   const resolvedVersion = catalogEntry.version ?? version;
-  const availableVersions = await FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl, packageId, includePrerelease);
+  const availableVersions = await FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl, packageId, includePrerelease, requestHeaders);
   const readmeUrl = catalogEntry.readmeUrl || BuildReadmeUrl(FindServiceResource(serviceIndex, "readmeuritemplate")?.["@id"], packageId, resolvedVersion);
-  const readme = readmeUrl ? await TryFetchText(readmeUrl) : "";
+  const readme = readmeUrl ? await TryFetchText(readmeUrl, requestHeaders) : "";
 
   return {
     id: catalogEntry.id ?? packageId,
@@ -1128,11 +1380,16 @@ async function FetchPackageDetails(sourceUrl: string, packageId: string, version
   };
 }
 
-async function FetchPackageVersions(sourceUrl: string, packageId: string, includePrerelease: boolean): Promise<string[]> {
-  return await FetchPackageVersionsFromRegistrationsBaseUrl(await ResolveRegistrationsBaseUrl(sourceUrl), packageId, includePrerelease);
+async function FetchPackageVersions(sourceUrl: string, packageId: string, includePrerelease: boolean, requestHeaders?: Record<string, string>): Promise<string[]> {
+  return await FetchPackageVersionsFromRegistrationsBaseUrl(await ResolveRegistrationsBaseUrl(sourceUrl, requestHeaders), packageId, includePrerelease, requestHeaders);
 }
 
-async function FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl: string, packageId: string, includePrerelease: boolean): Promise<string[]> {
+async function FetchPackageVersionsFromRegistrationsBaseUrl(
+  registrationsBaseUrl: string,
+  packageId: string,
+  includePrerelease: boolean,
+  requestHeaders?: Record<string, string>
+): Promise<string[]> {
   const normalizedBaseUrl = registrationsBaseUrl.endsWith("/") ? registrationsBaseUrl : `${registrationsBaseUrl}/`;
   const encodedPackageId = encodeURIComponent(packageId.toLowerCase());
   const index = await FetchJson<{
@@ -1140,11 +1397,11 @@ async function FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl
       items?: NugetRegistrationLeaf[];
       "@id"?: string;
     }>;
-  }>(`${normalizedBaseUrl}${encodedPackageId}/index.json`);
+  }>(`${normalizedBaseUrl}${encodedPackageId}/index.json`, FeedRequestTimeoutMs, requestHeaders);
   const versions = new Set<string>();
 
   for (const page of index.items ?? []) {
-    const pageItems = page.items ?? (page["@id"] ? (await FetchJson<{ items?: NugetRegistrationLeaf[] }>(page["@id"])).items ?? [] : []);
+    const pageItems = page.items ?? (page["@id"] ? (await FetchJson<{ items?: NugetRegistrationLeaf[] }>(page["@id"], FeedRequestTimeoutMs, requestHeaders)).items ?? [] : []);
 
     pageItems.forEach((item) => {
       const version = GetCatalogEntryVersion(item.catalogEntry);
@@ -1158,8 +1415,8 @@ async function FetchPackageVersionsFromRegistrationsBaseUrl(registrationsBaseUrl
   return Array.from(versions).sort((left, right) => CompareVersions(right, left));
 }
 
-async function ResolveRegistrationsBaseUrl(sourceUrl: string): Promise<string> {
-  return GetRegistrationsBaseUrl(await FetchServiceIndex(sourceUrl));
+async function ResolveRegistrationsBaseUrl(sourceUrl: string, requestHeaders?: Record<string, string>): Promise<string> {
+  return GetRegistrationsBaseUrl(await FetchServiceIndex(sourceUrl, FeedRequestTimeoutMs, requestHeaders));
 }
 
 function GetRegistrationsBaseUrl(serviceIndex: ServiceIndex): string {
@@ -1176,25 +1433,30 @@ function IsPrereleaseVersion(version: string): boolean {
   return version.includes("-");
 }
 
-async function FetchRegistrationLeaf(registrationsBaseUrl: string, packageId: string, version: string): Promise<NugetRegistrationLeaf> {
+async function FetchRegistrationLeaf(
+  registrationsBaseUrl: string,
+  packageId: string,
+  version: string,
+  requestHeaders?: Record<string, string>
+): Promise<NugetRegistrationLeaf> {
   const normalizedBaseUrl = registrationsBaseUrl.endsWith("/") ? registrationsBaseUrl : `${registrationsBaseUrl}/`;
   const encodedPackageId = encodeURIComponent(packageId.toLowerCase());
   const encodedVersion = encodeURIComponent(version.toLowerCase());
   const registrationUrl = `${normalizedBaseUrl}${encodedPackageId}/${encodedVersion}.json`;
 
   try {
-    return await FetchJson(registrationUrl);
+    return await FetchJson(registrationUrl, FeedRequestTimeoutMs, requestHeaders);
   } catch {
     const index = await FetchJson<{
       items?: Array<{
         items?: NugetRegistrationLeaf[];
         "@id"?: string;
       }>;
-    }>(`${normalizedBaseUrl}${encodedPackageId}/index.json`);
+    }>(`${normalizedBaseUrl}${encodedPackageId}/index.json`, FeedRequestTimeoutMs, requestHeaders);
     const lowerVersion = version.toLowerCase();
 
     for (const page of index.items ?? []) {
-      const pageItems = page.items ?? (page["@id"] ? (await FetchJson<{ items?: NugetRegistrationLeaf[] }>(page["@id"])).items ?? [] : []);
+      const pageItems = page.items ?? (page["@id"] ? (await FetchJson<{ items?: NugetRegistrationLeaf[] }>(page["@id"], FeedRequestTimeoutMs, requestHeaders)).items ?? [] : []);
       const match = pageItems.find((item) => GetCatalogEntryVersion(item.catalogEntry)?.toLowerCase() === lowerVersion);
 
       if (match) {
@@ -1206,13 +1468,13 @@ async function FetchRegistrationLeaf(registrationsBaseUrl: string, packageId: st
   }
 }
 
-async function ResolveCatalogEntry(catalogEntry: NugetRegistrationLeaf["catalogEntry"]): Promise<NugetCatalogEntry> {
+async function ResolveCatalogEntry(catalogEntry: NugetRegistrationLeaf["catalogEntry"], requestHeaders?: Record<string, string>): Promise<NugetCatalogEntry> {
   if (!catalogEntry) {
     return {};
   }
 
   if (typeof catalogEntry === "string") {
-    return await FetchJson<NugetCatalogEntry>(catalogEntry);
+    return await FetchJson<NugetCatalogEntry>(catalogEntry, FeedRequestTimeoutMs, requestHeaders);
   }
 
   return catalogEntry;
@@ -1316,14 +1578,14 @@ function ScorePackageDetails(details: PackageDetailsPayload["details"]): number 
   );
 }
 
-async function FetchServiceIndex(sourceUrl: string, timeoutMs = FeedRequestTimeoutMs): Promise<ServiceIndex> {
+async function FetchServiceIndex(sourceUrl: string, timeoutMs = FeedRequestTimeoutMs, requestHeaders?: Record<string, string>): Promise<ServiceIndex> {
   const serviceIndexUrl = sourceUrl.trim();
 
   if (!IsHttpSource(serviceIndexUrl)) {
     throw new Error("Package details are available for HTTP NuGet v3 sources.");
   }
 
-  return await FetchJson<ServiceIndex>(serviceIndexUrl, timeoutMs);
+  return await FetchJson<ServiceIndex>(serviceIndexUrl, timeoutMs, requestHeaders);
 }
 
 function BuildPackageVersions(latestVersion: string | undefined, versions: Array<{ version?: string }> | undefined): string[] {
@@ -1342,8 +1604,8 @@ function BuildPackageVersions(latestVersion: string | undefined, versions: Array
   return Array.from(allVersions).sort((left, right) => CompareVersions(right, left));
 }
 
-async function FetchJson<T>(url: string, timeoutMs = FeedRequestTimeoutMs): Promise<T> {
-  const response = await FetchWithTimeout(url, timeoutMs);
+async function FetchJson<T>(url: string, timeoutMs = FeedRequestTimeoutMs, requestHeaders?: Record<string, string>): Promise<T> {
+  const response = await FetchWithTimeout(url, timeoutMs, requestHeaders);
 
   if (!response.ok) {
     throw new Error(`NuGet source returned HTTP ${response.status}.`);
@@ -1352,8 +1614,8 @@ async function FetchJson<T>(url: string, timeoutMs = FeedRequestTimeoutMs): Prom
   return (await response.json()) as T;
 }
 
-async function FetchText(url: string): Promise<string> {
-  const response = await FetchWithTimeout(url, FeedRequestTimeoutMs);
+async function FetchText(url: string, requestHeaders?: Record<string, string>): Promise<string> {
+  const response = await FetchWithTimeout(url, FeedRequestTimeoutMs, requestHeaders);
 
   if (!response.ok) {
     throw new Error(`NuGet source returned HTTP ${response.status}.`);
@@ -1362,12 +1624,15 @@ async function FetchText(url: string): Promise<string> {
   return await response.text();
 }
 
-async function FetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+async function FetchWithTimeout(url: string, timeoutMs: number, requestHeaders?: Record<string, string>): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: requestHeaders
+    });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`NuGet source did not respond within ${timeoutMs / 1000} seconds.`);
@@ -1383,9 +1648,9 @@ function IsSourceUsableForRequests(source: NugetSource): boolean {
   return source.enabled && source.healthStatus !== "error";
 }
 
-async function TryFetchText(url: string): Promise<string> {
+async function TryFetchText(url: string, requestHeaders?: Record<string, string>): Promise<string> {
   try {
-    return await FetchText(url);
+    return await FetchText(url, requestHeaders);
   } catch {
     return "";
   }

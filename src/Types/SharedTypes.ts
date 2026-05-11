@@ -5,6 +5,9 @@ export interface NugetSource {
   name: string;
   url: string;
   enabled: boolean;
+  authMode?: SourceAuthMode;
+  username?: string;
+  password?: string;
   healthStatus?: "ok" | "error" | "unknown";
   healthMessage?: string;
 }
