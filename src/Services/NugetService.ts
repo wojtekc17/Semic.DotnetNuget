@@ -461,6 +461,15 @@ export class NugetService {
   public async BulkInstallPackages(request: BulkInstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
     let operationCount = 0;
     const failures: string[] = [];
+    const sources = await this.ListSources(false);
+    const source =
+      request.sourceName === AllSourcesName || request.sourceName.trim().length === 0
+        ? undefined
+        : sources.find((candidate) => candidate.name === request.sourceName);
+
+    if (source && !IsSourceUsableForRequests(source)) {
+      throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before updating packages.");
+    }
 
     for (const item of request.items) {
       const selectedProjects = projects.filter(
@@ -483,10 +492,17 @@ export class NugetService {
           if (updated) {
             operationCount += 1;
           } else {
-            failures.push(`Failed to update ${item.packageId} in ${project.name}.\nNo editable PackageReference or Directory.Packages.props entry was found.`);
+            const args = ["add", project.path, "package", item.packageId, "--version", targetVersion];
+
+            if (source?.url) {
+              args.push("--source", source.url);
+            }
+
+            await this.RunDotnet(args);
+            operationCount += 1;
           }
         } catch (error) {
-          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, ["local-xml-update", project.path, item.packageId, targetVersion], error));
+          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, ["add", project.path, "package", item.packageId, "--version", targetVersion], error));
         }
       }
     }

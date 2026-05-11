@@ -74,6 +74,7 @@ export function App() {
     const [sourceActionName, setSourceActionName] = useState("");
     const [errors, setErrors] = useState<ProjectError[]>([]);
     const [errorDetails, setErrorDetails] = useState("");
+    const [errorLogOpen, setErrorLogOpen] = useState(false);
     const browseTimerRef = useRef<number | undefined>(undefined);
     const sourceChangeTimerRef = useRef<number | undefined>(undefined);
     const refreshFrameRef = useRef<number | undefined>(undefined);
@@ -232,6 +233,11 @@ export function App() {
                 setSourceActionName("");
                 setBulkSelectionKey("");
 
+                if (message.payload.status !== "error") {
+                    setErrorDetails("");
+                    setErrorLogOpen(false);
+                }
+
                 // Keep settings form open during background refresh updates.
                 // Close it only after source add/update/remove workflows complete.
                 if (actionBusy === "source") {
@@ -278,6 +284,7 @@ export function App() {
                 setStatus("error");
                 setStatusMessage(message.payload.message);
                 setErrorDetails(message.payload.details ?? "");
+                setErrorLogOpen(false);
                 setActionBusy("");
                 setSourceActionName("");
                 setBrowseLoading(false);
@@ -352,6 +359,7 @@ export function App() {
         setStatusMessage("Loading workspace projects and NuGet sources...");
         setActionBusy("refresh");
         setErrorDetails("");
+        setErrorLogOpen(false);
         setBrowsePackages([]);
         setBrowseSkip(0);
         setBrowseHasMore(false);
@@ -385,6 +393,7 @@ export function App() {
         setSelectedProjectIds(new Set());
         setPreviewTab("details");
         setErrorDetails("");
+        setErrorLogOpen(false);
 
         if (activeTab === "browse") {
             setBrowsePackages([]);
@@ -406,9 +415,10 @@ export function App() {
     };
 
     const selectBrowsePackage = (packageInfo: BrowsePackageInfo) => {
+        const installedPackage = installedPackages.find((packageGroup) => packageGroup.id === packageInfo.id);
         setSelectedPackageId(packageInfo.id);
         setSelectedPackageVersion(packageInfo.version);
-        setSelectedProjectIds(new Set());
+        setSelectedProjectIds(new Set((installedPackage?.projects ?? []).map((project) => project.projectId)));
         setSettingsOpen(false);
         setInfoOpen(false);
         setPreviewTab("details");
@@ -419,7 +429,7 @@ export function App() {
         const version = activeTab === "updates" ? latestVersion || packageGroup.versions.at(-1) || packageGroup.versions[0] || "" : packageGroup.versions.at(-1) || packageGroup.versions[0] || "";
         setSelectedPackageId(packageGroup.id);
         setSelectedPackageVersion(version);
-        setSelectedProjectIds(new Set());
+        setSelectedProjectIds(new Set(packageGroup.projects.map((project) => project.projectId)));
         setSettingsOpen(false);
         setInfoOpen(false);
         setPreviewTab("details");
@@ -428,6 +438,18 @@ export function App() {
     const bulkItems = getBulkPackageItems(activeTab, visibleGroups, bulkSelectedPackageIds, selectedSourceName);
     const details = selectedPackage ? packageDetails[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)] : undefined;
     const detailsLoading = selectedPackage ? Boolean(packageDetailsLoading[packageDetailsKey(selectedPackage.id, selectedPackageVersion || selectedPackage.version)]) : false;
+    const selectableProjectIds = useMemo(() => {
+        if (!selectedPackage) {
+            return [] as string[];
+        }
+
+        if (activeTab === "browse") {
+            return projects.map((project) => project.id);
+        }
+
+        const packageProjectIds = (selectedPackage.projects ?? []).map((project) => project.projectId);
+        return packageProjectIds.length > 0 ? packageProjectIds : projects.map((project) => project.id);
+    }, [activeTab, projects, selectedPackage]);
     const isWorkspaceReloading = workspaceRefreshPending;
     const isBackgroundTabLoading = !isWorkspaceReloading
         && ((activeTab === "updates" && updatesDataPending) || (activeTab === "vulnerabilities" && vulnerabilitiesDataPending));
@@ -651,7 +673,10 @@ export function App() {
                                 return next;
                             })}
                             onToggleSettings={() => setSettingsOpen(true)}
-                            onToggleAllProjects={() => setSelectedProjectIds((current) => current.size === projects.length ? new Set() : new Set(projects.map((project) => project.id)))}
+                            onToggleAllProjects={() => setSelectedProjectIds((current) => {
+                                const allSelected = selectableProjectIds.length > 0 && selectableProjectIds.every((id) => current.has(id));
+                                return allSelected ? new Set() : new Set(selectableProjectIds);
+                            })}
                             onUninstall={() => {
                                 if (selectedProjectIds.size === 0) {
                                     setStatus("error");
@@ -670,15 +695,27 @@ export function App() {
                     )}
                 </aside>
             </main>
-            {errorDetails ? (
+            {errorDetails && errorLogOpen ? (
                 <section className="operationErrorPanel">
-                    <strong>Operation log</strong>
+                    <div className="operationErrorHeader">
+                        <strong>Operation log</strong>
+                        <button type="button" className="operationErrorClose" onClick={() => setErrorLogOpen(false)}>Hide</button>
+                    </div>
                     <pre>{errorDetails}</pre>
                 </section>
             ) : null}
             <footer className={`statusBar status-${status}`}>
                 <strong>{status.toUpperCase()}</strong>
                 <span>{statusMessage}</span>
+                {errorDetails ? (
+                    <button
+                        type="button"
+                        className="statusLogsButton"
+                        onClick={() => setErrorLogOpen((current) => !current)}
+                    >
+                        {errorLogOpen ? "Hide logs" : "Logs"}
+                    </button>
+                ) : null}
             </footer>
         </div>
     );

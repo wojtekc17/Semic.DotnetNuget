@@ -1236,11 +1236,49 @@ select {
   font-size: 12px;
 }
 
+.statusLogsButton {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.statusLogsButton:hover {
+  background: color-mix(in srgb, var(--text) 8%, var(--input));
+}
+
 .operationErrorPanel {
   display: grid;
   gap: 8px;
   padding: 10px;
   border-top: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+  background: color-mix(in srgb, var(--error) 10%, var(--input));
+}
+
+.operationErrorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.operationErrorClose {
+  border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.operationErrorClose:hover {
   background: color-mix(in srgb, var(--error) 10%, var(--input));
 }
 
@@ -1253,6 +1291,7 @@ select {
   margin: 0;
   padding: 10px;
   overflow: auto;
+  max-height: 220px;
   white-space: pre-wrap;
   word-break: break-word;
   border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
