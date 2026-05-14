@@ -173,6 +173,7 @@ export interface BulkInstallPackageRequest {
     projectIds: string[];
   }>;
   sourceName: string;
+  verifyAfterUpdate?: boolean;
 }
 
 export interface UninstallPackageRequest {

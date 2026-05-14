@@ -4,6 +4,7 @@ import { InstalledEmptyState, PackageIcon } from "./Common";
 export function InstalledPackageList(props: {
     activeTab: TabKey;
     bulkSelectedPackageIds: Set<string>;
+    controlsDisabled: boolean;
     groups: PackageGroupInfo[];
     searchTerm: string;
     selectedPackageId: string;
@@ -27,12 +28,13 @@ export function InstalledPackageList(props: {
                             <input
                                 className="bulkPackageCheckbox"
                                 checked={props.bulkSelectedPackageIds.has(packageGroup.id)}
+                                disabled={props.controlsDisabled}
                                 type="checkbox"
                                 aria-label={`Select ${packageGroup.id} for bulk action`}
                                 onChange={(event) => props.onBulkSelectionChange(packageGroup.id, event.target.checked)}
                             />
                         ) : null}
-                        <button className="packageButton packageContentButton" data-testid={`installed-package-button-${packageGroup.id}`} type="button" onClick={() => props.onSelect(packageGroup)}>
+                        <button className="packageButton packageContentButton" data-testid={`installed-package-button-${packageGroup.id}`} disabled={props.controlsDisabled} type="button" onClick={() => props.onSelect(packageGroup)}>
                             <PackageIcon packageId={packageGroup.id} packageVersion={iconVersion} />
                             <div className="packageMain">
                                 <h3>{packageGroup.id}</h3>

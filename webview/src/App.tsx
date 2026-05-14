@@ -208,7 +208,11 @@ export function App() {
             }
 
             if (message.type === "workspaceLoaded") {
-                if (pendingRefreshRequestIdRef.current !== undefined && message.payload.requestId !== pendingRefreshRequestIdRef.current) {
+                if (
+                    pendingRefreshRequestIdRef.current !== undefined
+                    && typeof message.payload.requestId === "number"
+                    && message.payload.requestId !== pendingRefreshRequestIdRef.current
+                ) {
                     return;
                 }
 
@@ -332,6 +336,21 @@ export function App() {
             requestPackageDetails(selectedPackage, selectedPackageVersion || selectedPackage.version);
         }
     }, [requestPackageDetails, selectedPackage, selectedPackageVersion]);
+
+    useEffect(() => {
+        if (activeTab === "browse" || !selectedPackageId) {
+            return;
+        }
+
+        const stillVisible = visibleGroups.some((group) => group.id === selectedPackageId);
+
+        if (!stillVisible) {
+            setSelectedPackageId("");
+            setSelectedPackageVersion("");
+            setSelectedProjectIds(new Set());
+            setPreviewTab("details");
+        }
+    }, [activeTab, selectedPackageId, visibleGroups]);
 
     const selectTab = (tab: TabKey) => {
         setActiveTab(tab);
@@ -461,6 +480,7 @@ export function App() {
         vulnerabilities: isWorkspaceReloading || vulnerabilitiesDataPending
     } as const;
     const toolbarBusyAction: BusyAction = isWorkspaceReloading ? "refresh" : actionBusy;
+    const controlsDisabled = toolbarBusyAction !== "";
 
     return (
         <div className="appShell">
@@ -483,7 +503,14 @@ export function App() {
                             setStatus("loading");
                             setStatusMessage("Updating selected package references...");
                             setErrorDetails("");
-                            vscode.postMessage({ type: "bulkInstallPackages", payload: { items: bulkItems, sourceName: selectedSourceName } });
+                            vscode.postMessage({
+                                type: "bulkInstallPackages",
+                                payload: {
+                                    items: bulkItems,
+                                    sourceName: selectedSourceName,
+                                    verifyAfterUpdate: activeTab !== "consolidated"
+                                }
+                            });
                         }}
                         onChangePrerelease={changePrerelease}
                         onChangeSearch={changeSearch}
@@ -529,6 +556,7 @@ export function App() {
                             <InstalledPackageList
                                 activeTab={activeTab}
                                 bulkSelectedPackageIds={bulkSelectedPackageIds}
+                                controlsDisabled={controlsDisabled}
                                 groups={visibleGroups}
                                 searchTerm={searchTerm}
                                 selectedPackageId={selectedPackageId}
@@ -637,7 +665,7 @@ export function App() {
                     ) : selectedPackage ? (
                         <PackageDetailsPane
                             activeTab={activeTab}
-                            actionBusy={actionBusy}
+                            actionBusy={toolbarBusyAction}
                             details={details}
                             detailsLoading={detailsLoading}
                             packageInfo={selectedPackage}

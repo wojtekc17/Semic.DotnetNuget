@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-05-14
+
+### Added
+
+- Added optional `verifyAfterUpdate` flag to bulk update requests, allowing consolidate flows to skip post-update verification when not needed.
+- Added regression coverage for:
+  - consolidated-tab refresh behavior when `workspaceLoaded` arrives without `requestId`,
+  - updates visibility with `Microsoft.EntityFrameworkCore.Design` project references,
+  - webview bootstrap handling for explicit `refresh` messages.
+
+### Changed
+
+- Bulk package action flow now sends `verifyAfterUpdate: false` for `Consolidated` tab actions and keeps verification enabled for `Updates`.
+- UI controls are now consistently disabled while an action is in progress (`refresh`, `install`, `uninstall`, `bulk`, `source`) across toolbar, installed list, and package details forms.
+- Tab badges are now hidden while a tab is in loading state to avoid showing stale counts during refresh.
+- Selected package details are now auto-cleared when the selected package is no longer visible after filtering or state refresh.
+- Improved `workspaceLoaded` request correlation in the webview so payloads without `requestId` are still accepted during pending refresh flows.
+
+### Fixed
+
+- Fixed XML package update writes for `.csproj` and `Directory.Packages.props` files with non-UTF8 encodings by preserving detected XML encoding (`utf8`, `utf16-le`, `utf16-be`) and UTF-8 BOM behavior.
+- Fixed post-consolidation state where `Updates` and `Vulnerabilities` could temporarily show `0` items until manual refresh by ensuring background enrichment runs after bulk operations.
+- Fixed bulk operation result messaging so non-verified flows no longer report "and verified" when verification was intentionally skipped.
+
 ## [1.5.1] - 2026-05-11
 
 ### Changed

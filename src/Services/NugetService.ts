@@ -519,16 +519,22 @@ export class NugetService {
       throw new OperationError(message, failures.join("\n\n"));
     }
 
-    const verificationFailures = await this.VerifyBulkPackageUpdates(request);
+    const shouldVerify = request.verifyAfterUpdate ?? true;
 
-    if (verificationFailures.length > 0) {
-      throw new OperationError(
-        `Updated ${operationCount} project reference(s), but verification failed for ${verificationFailures.length} project/package pair(s).`,
-        verificationFailures.join("\n\n")
-      );
+    if (shouldVerify) {
+      const verificationFailures = await this.VerifyBulkPackageUpdates(request);
+
+      if (verificationFailures.length > 0) {
+        throw new OperationError(
+          `Updated ${operationCount} project reference(s), but verification failed for ${verificationFailures.length} project/package pair(s).`,
+          verificationFailures.join("\n\n")
+        );
+      }
+
+      return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s) and verified.`;
     }
 
-    return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s) and verified.`;
+    return `Updated ${request.items.length} package(s) across ${operationCount} project reference(s).`;
   }
 
   public async UninstallPackage(request: UninstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
@@ -609,14 +615,14 @@ export class NugetService {
 
   private async UpdatePackageReferenceVersion(projectPath: string, packageId: string, version: string): Promise<boolean> {
     const projectUri = vscode.Uri.file(projectPath);
-    const { text, hasUtf8Bom } = await ReadUtf8TextFile(projectUri);
+    const { text, encoding, hasUtf8Bom } = await ReadXmlTextFile(projectUri);
     const updated = ReplacePackageReferenceVersion(text, packageId, version);
 
     if (updated === text) {
       return false;
     }
 
-    await WriteUtf8TextFile(projectUri, updated, hasUtf8Bom);
+    await WriteXmlTextFile(projectUri, updated, encoding, hasUtf8Bom);
     return true;
   }
 
@@ -640,11 +646,11 @@ export class NugetService {
         continue;
       }
 
-      const { text, hasUtf8Bom } = await ReadUtf8TextFile(candidateUri);
+      const { text, encoding, hasUtf8Bom } = await ReadXmlTextFile(candidateUri);
       const updated = ReplaceCentralPackageVersion(text, packageId, version);
 
       if (updated !== text) {
-        await WriteUtf8TextFile(candidateUri, updated, hasUtf8Bom);
+        await WriteXmlTextFile(candidateUri, updated, encoding, hasUtf8Bom);
         return true;
       }
 
@@ -1745,18 +1751,58 @@ function CompareVersions(left: string, right: string): number {
   });
 }
 
-async function ReadUtf8TextFile(fileUri: vscode.Uri): Promise<{ text: string; hasUtf8Bom: boolean }> {
+type XmlEncoding = "utf8" | "utf16-le" | "utf16-be";
+
+async function ReadXmlTextFile(fileUri: vscode.Uri): Promise<{ text: string; encoding: XmlEncoding; hasUtf8Bom: boolean }> {
   const bytes = await vscode.workspace.fs.readFile(fileUri);
   const buffer = Buffer.from(bytes);
   const hasUtf8Bom = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
+  const hasUtf16LeBom = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
+  const hasUtf16BeBom = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
+  const xmlHeaderProbe = buffer.toString("latin1", 0, Math.min(buffer.length, 256));
+  const xmlEncoding = xmlHeaderProbe.match(/encoding=["']([^"']+)["']/i)?.[1]?.toLowerCase();
+  const encoding: XmlEncoding =
+    (hasUtf16LeBom && "utf16-le") ||
+    (hasUtf16BeBom && "utf16-be") ||
+    (xmlEncoding === "utf-16" || xmlEncoding === "utf-16le" || xmlEncoding === "utf16-le" ? "utf16-le" : undefined) ||
+    (xmlEncoding === "utf-16be" || xmlEncoding === "utf16-be" ? "utf16-be" : undefined) ||
+    "utf8";
+
+  if (encoding === "utf16-le") {
+    return { text: new TextDecoder("utf-16le").decode(buffer), encoding, hasUtf8Bom: false };
+  }
+
+  if (encoding === "utf16-be") {
+    return { text: DecodeUtf16Be(buffer), encoding, hasUtf8Bom: false };
+  }
+
   const text = new TextDecoder("utf-8").decode(hasUtf8Bom ? buffer.subarray(3) : buffer);
 
-  return { text, hasUtf8Bom };
+  return { text, encoding, hasUtf8Bom };
 }
 
-async function WriteUtf8TextFile(fileUri: vscode.Uri, text: string, withUtf8Bom: boolean): Promise<void> {
-  const encoded = new TextEncoder().encode(text);
+async function WriteXmlTextFile(fileUri: vscode.Uri, text: string, encoding: XmlEncoding, withUtf8Bom: boolean): Promise<void> {
+  if (encoding === "utf16-le") {
+    const encoded = Buffer.from(text, "utf16le");
+    await vscode.workspace.fs.writeFile(fileUri, new Uint8Array(encoded));
+    return;
+  }
 
+  if (encoding === "utf16-be") {
+    const encodedLe = Buffer.from(text, "utf16le");
+    const encodedBe = Buffer.from(encodedLe);
+
+    for (let index = 0; index + 1 < encodedBe.length; index += 2) {
+      const byte = encodedBe[index];
+      encodedBe[index] = encodedBe[index + 1];
+      encodedBe[index + 1] = byte;
+    }
+
+    await vscode.workspace.fs.writeFile(fileUri, new Uint8Array(encodedBe));
+    return;
+  }
+
+  const encoded = new TextEncoder().encode(text);
   if (!withUtf8Bom) {
     await vscode.workspace.fs.writeFile(fileUri, encoded);
     return;
@@ -1768,6 +1814,18 @@ async function WriteUtf8TextFile(fileUri: vscode.Uri, text: string, withUtf8Bom:
   output[2] = 0xbf;
   output.set(encoded, 3);
   await vscode.workspace.fs.writeFile(fileUri, output);
+}
+
+function DecodeUtf16Be(buffer: Buffer): string {
+  const swapped = Buffer.from(buffer);
+
+  for (let index = 0; index + 1 < swapped.length; index += 2) {
+    const byte = swapped[index];
+    swapped[index] = swapped[index + 1];
+    swapped[index + 1] = byte;
+  }
+
+  return new TextDecoder("utf-16le").decode(swapped);
 }
 
 function ReplacePackageReferenceVersion(xmlText: string, packageId: string, version: string): string {

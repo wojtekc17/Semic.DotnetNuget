@@ -62,7 +62,7 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
     );
   }
 
-  public async Refresh(options?: { preserveBusyState?: boolean; requestId?: number }): Promise<void> {
+  public async Refresh(options?: { preserveBusyState?: boolean; requestId?: number; skipBackgroundData?: boolean }): Promise<void> {
     if (!this.webviewView) {
       return;
     }
@@ -93,12 +93,15 @@ export class NugetPanel implements vscode.WebviewViewProvider, vscode.Disposable
         payload: {
           ...payload,
           requestId: options?.requestId,
-          backgroundDataPending: payload.projects.length > 0,
-          updatesDataPending: payload.projects.length > 0,
-          vulnerabilitiesDataPending: payload.projects.length > 0
+          backgroundDataPending: !options?.skipBackgroundData && payload.projects.length > 0,
+          updatesDataPending: !options?.skipBackgroundData && payload.projects.length > 0,
+          vulnerabilitiesDataPending: !options?.skipBackgroundData && payload.projects.length > 0
         }
       });
-      void this.RefreshWorkspaceBackgroundData(refreshSequence, payload, options?.requestId);
+
+      if (!options?.skipBackgroundData) {
+        void this.RefreshWorkspaceBackgroundData(refreshSequence, payload, options?.requestId);
+      }
     } catch (error) {
       if (refreshSequence !== this.refreshSequence) {
         return;
