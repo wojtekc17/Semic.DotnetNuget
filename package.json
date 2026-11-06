@@ -24,7 +24,7 @@
     "csharp",
     "semic"
   ],
-  "icon": "media/icon.webp",
+  "icon": "media/icon.png",
   "main": "./dist/Extension.js",
   "contributes": {
     "configuration": {
@@ -69,7 +69,7 @@
         {
           "id": "semicDotnetNugetPanelContainer",
           "title": "NUGET",
-          "icon": "media/icon.webp"
+          "icon": "media/icon.png"
         }
       ]
     },
@@ -79,7 +79,7 @@
           "id": "semicDotnetNugetView",
           "name": "Packages",
           "type": "webview",
-          "icon": "media/icon.webp"
+          "icon": "media/icon.png"
         }
       ]
     },
