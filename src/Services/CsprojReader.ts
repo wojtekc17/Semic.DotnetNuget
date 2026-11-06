@@ -88,7 +88,7 @@ export class CsprojReader {
           const version = element.attributes.Version || GetChildText(element.body, "Version") || "";
 
           if (id.trim().length > 0 && version.trim().length > 0) {
-            versions.set(id.trim(), version.trim());
+            versions.set(id.trim().toLowerCase(), version.trim());
           }
         });
 
@@ -121,22 +121,23 @@ function ExtractPackageReferences(
 ): Array<Omit<PackageReferenceInfo, "projectId" | "projectName" | "projectPath" | "relativeProjectPath">> {
   return ExtractXmlElements(xmlText, "PackageReference")
     .map((element) => {
-      const id = element.attributes.Include || element.attributes.Update || element.attributes.Remove || "";
-      const version = element.attributes.Version || GetChildText(element.body, "Version") || centralVersions.get(id.trim()) || "";
+      const id = element.attributes.Remove ? "" : element.attributes.Include || element.attributes.Update || "";
+      const version = element.attributes.VersionOverride || GetChildText(element.body, "VersionOverride") || element.attributes.Version || GetChildText(element.body, "Version") || centralVersions.get(id.trim().toLowerCase()) || "";
 
       return {
         id: id.trim(),
         version: version.trim()
       };
     })
-    .filter((packageReference) => packageReference.id.length > 0 && packageReference.version.length > 0);
+    .filter((packageReference) => packageReference.id.length > 0);
 }
 
 function ExtractXmlElements(xmlText: string, tagName: string): Array<{ attributes: Record<string, string>; body: string }> {
   const elements: Array<{ attributes: Record<string, string>; body: string }> = [];
+  xmlText = xmlText.replace(/<!--[\s\S]*?-->/g, "");
   const escapedTagName = EscapeRegExp(tagName);
   const elementPattern = new RegExp(
-    `<${escapedTagName}\\b([^>]*)>([\\s\\S]*?)<\\/${escapedTagName}>|<${escapedTagName}\\b([^>]*)\\/?>`,
+    `<${escapedTagName}\\b([^>]*?)(?<!/)>([\\s\\S]*?)<\\/${escapedTagName}>|<${escapedTagName}\\b([^>]*)\\/?>`,
     "gi"
   );
   let match: RegExpExecArray | null;

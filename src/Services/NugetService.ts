@@ -413,31 +413,19 @@ export class NugetService {
     }
 
     const requestedVersion = request.version?.trim();
-    let inPlaceUpdatedProjects = 0;
-
-    for (const project of selectedProjects) {
-      const hasPackageReference = project.packages.some((packageReference) => packageReference.id.toLowerCase() === request.packageId.toLowerCase());
-
-      if (hasPackageReference && requestedVersion) {
-        const updated = await this.UpdatePackageVersionInProjectOrCentral(project.path, request.packageId, requestedVersion);
-
-        if (updated) {
-          inPlaceUpdatedProjects += 1;
-          continue;
-        }
-      }
-
+    const failures = await MapWithConcurrencyLimit(selectedProjects, await this.PackageOperationConcurrency(selectedProjects), async (project) => {
       const args = ["add", project.path, "package", request.packageId];
-
-      if (requestedVersion) {
-        args.push("--version", requestedVersion);
+      if (requestedVersion) args.push("--version", requestedVersion);
+      if (source?.url) args.push("--source", source.url);
+      try {
+        await this.RunValidatedPackageCommand(project.path, args);
+        return "";
+      } catch (error) {
+        return this.FormatCommandFailure(`Failed to install ${request.packageId} in ${project.name}.`, args, error);
       }
-
-      if (source?.url) {
-        args.push("--source", source.url);
-      }
-
-      await this.RunDotnet(args);
+    });
+    if (failures.some(Boolean)) {
+      throw new OperationError("Package installation failed in some projects.", failures.filter(Boolean).join("\n\n"));
     }
 
     const verificationFailures = await this.VerifyPackageApplied(
@@ -453,9 +441,7 @@ export class NugetService {
       ].join("\n"));
     }
 
-    return inPlaceUpdatedProjects > 0
-      ? `Applied ${request.packageId} in ${selectedProjects.length} project(s); ${inPlaceUpdatedProjects} project(s) were updated directly in XML and verified.`
-      : `Installed ${request.packageId} in ${selectedProjects.length} project(s) and verified.`;
+    return `Installed ${request.packageId} in ${selectedProjects.length} project(s) and verified.`;
   }
 
   public async BulkInstallPackages(request: BulkInstallPackageRequest, projects: NugetWorkspacePayload["projects"]): Promise<string> {
@@ -471,41 +457,30 @@ export class NugetService {
       throw new Error("Selected NuGet source is unavailable. Disable it or choose another source before updating packages.");
     }
 
-    for (const item of request.items) {
-      const selectedProjects = projects.filter(
-        (project) =>
-          item.projectIds.includes(project.id) &&
-          project.packages.some((packageReference) => packageReference.id.toLowerCase() === item.packageId.toLowerCase())
-      );
-
-      for (const project of selectedProjects) {
-        const targetVersion = item.version.trim();
-
-        if (!targetVersion) {
-          failures.push(`Failed to update ${item.packageId} in ${project.name}.\nTarget version is empty.`);
-          continue;
+    // Each project is handled by one worker, so its file is never modified concurrently.
+    await MapWithConcurrencyLimit(projects.filter((project) => request.items.some((item) => item.projectIds.includes(project.id))), await this.PackageOperationConcurrency(projects), async (project) => {
+      const items = request.items.filter((item) => item.projectIds.includes(project.id) && project.packages.some((reference) => reference.id.toLowerCase() === item.packageId.toLowerCase()));
+      if (items.length === 0) return;
+      const uri = vscode.Uri.file(project.path);
+      const original = await vscode.workspace.fs.readFile(uri);
+      const central = await this.ReadCentralSnapshot(project.path);
+      try {
+        for (const item of items) {
+          if (!item.version.trim()) throw new Error(`Target version for ${item.packageId} is empty.`);
+          const args = ["add", project.path, "package", item.packageId, "--version", item.version.trim(), "--no-restore"];
+          if (source?.url) args.push("--source", source.url);
+          await this.RunDotnet(args);
         }
-
-        try {
-          const updated = await this.UpdatePackageVersionInProjectOrCentral(project.path, item.packageId, targetVersion);
-
-          if (updated) {
-            operationCount += 1;
-          } else {
-            const args = ["add", project.path, "package", item.packageId, "--version", targetVersion];
-
-            if (source?.url) {
-              args.push("--source", source.url);
-            }
-
-            await this.RunDotnet(args);
-            operationCount += 1;
-          }
-        } catch (error) {
-          failures.push(this.FormatCommandFailure(`Failed to update ${item.packageId} in ${project.name}.`, ["add", project.path, "package", item.packageId, "--version", targetVersion], error));
-        }
+        const restoreArgs = ["restore", project.path, "--force-evaluate"];
+        if (source?.url) restoreArgs.push("--source", source.url);
+        await this.RunDotnet(restoreArgs);
+        operationCount += items.length;
+      } catch (error) {
+        await vscode.workspace.fs.writeFile(uri, original);
+        if (central) await vscode.workspace.fs.writeFile(central.uri, central.bytes);
+        failures.push(this.FormatCommandFailure(`Failed to update packages in ${project.name}; project file restored.`, ["restore", project.path], error));
       }
-    }
+    });
 
     if (operationCount === 0 && failures.length === 0) {
       throw new Error("No matching package references were found in the selected projects.");
@@ -1028,6 +1003,40 @@ export class NugetService {
     }
 
     args.push("--username", request.username.trim(), "--password", request.password, "--store-password-in-clear-text");
+  }
+
+  private async ReadCentralSnapshot(projectPath: string): Promise<{ uri: vscode.Uri; bytes: Uint8Array } | undefined> {
+    let directory = path.dirname(projectPath);
+    while (true) {
+      const uri = vscode.Uri.file(path.join(directory, "Directory.Packages.props"));
+      try {
+        return { uri, bytes: await vscode.workspace.fs.readFile(uri) };
+      } catch (error) {
+        if ((error as { code?: string }).code !== "FileNotFound" && (error as { code?: string }).code !== "ENOENT") throw error;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) return undefined;
+      directory = parent;
+    }
+  }
+
+  private async PackageOperationConcurrency(projects: NugetWorkspacePayload["projects"]): Promise<number> {
+    const centralFiles = await Promise.all(projects.map((project) => this.ReadCentralSnapshot(project.path)));
+    // The CLI may edit a shared central file; serialize these operations to avoid lost writes.
+    return centralFiles.some(Boolean) ? 1 : 4;
+  }
+
+  private async RunValidatedPackageCommand(projectPath: string, args: string[]): Promise<void> {
+    const uri = vscode.Uri.file(projectPath);
+    const original = await vscode.workspace.fs.readFile(uri);
+    const central = await this.ReadCentralSnapshot(projectPath);
+    try {
+      await this.RunDotnet(args);
+    } catch (error) {
+      await vscode.workspace.fs.writeFile(uri, original);
+      if (central) await vscode.workspace.fs.writeFile(central.uri, central.bytes);
+      throw error;
+    }
   }
 
   private async RunDotnet(args: string[]): Promise<{ stdout: string; stderr: string }> {
